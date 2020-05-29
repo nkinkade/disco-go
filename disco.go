@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -131,10 +132,114 @@ var (
 			},
 		),
 	}
+
+	seriesStartTime              = time.Now()
+	seriesDurationSeconds uint64 = 60
+
+	uplinkMetricSeries = map[string]series{
+		"ifHCInOctets": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.octets.uplink.rx",
+			Sample:     []sample{},
+		},
+		"ifHCOutOctets": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.octets.uplink.tx",
+			Sample:     []sample{},
+		},
+		"ifHCInUcastPkts": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.unicast.uplink.rx",
+			Sample:     []sample{},
+		},
+		"ifHCOutUcastPkts": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.unicast.uplink.tx",
+			Sample:     []sample{},
+		},
+		"ifInErrors": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.errors.uplink.rx",
+			Sample:     []sample{},
+		},
+		"ifOutErrors": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.errors.uplink.rx",
+			Sample:     []sample{},
+		},
+		"jnxCosQstatTotalDropPkts": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.discards.uplink",
+			Sample:     []sample{},
+		},
+	}
+
+	machineMetricSeries = map[string]series{
+		"ifHCInOctets": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.octets.local.rx",
+			Sample:     []sample{},
+		},
+		"ifHCOutOctets": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.octets.local.tx",
+			Sample:     []sample{},
+		},
+		"ifHCInUcastPkts": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.unicast.local.rx",
+			Sample:     []sample{},
+		},
+		"ifHCOutUcastPkts": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.unicast.local.tx",
+			Sample:     []sample{},
+		},
+		"ifInErrors": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.errors.local.rx",
+			Sample:     []sample{},
+		},
+		"ifOutErrors": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.errors.local.rx",
+			Sample:     []sample{},
+		},
+		"jnxCosQstatTotalDropPkts": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.discards.local",
+			Sample:     []sample{},
+		},
+	}
 )
 
+type sample struct {
+	Timestamp int64  `json:"timestamp"`
+	Value     uint64 `json:"value"`
+}
+
+type series struct {
+	Experiment string   `json:"experiment"`
+	Hostname   string   `json:"hostname"`
+	Metric     string   `json:"metric"`
+	Sample     []sample `json:"sample"`
+}
+
 func collectMetrics() {
-	fmt.Println("collectMetrics() called.")
 	snmp := &gosnmp.GoSNMP{
 		Target:    target,
 		Port:      uint16(161),
@@ -157,28 +262,50 @@ func collectMetrics() {
 
 	mIface, uIface := getIfaces(snmpPDUs)
 
-	fmt.Printf("miface: %v, uIface: %v\n", mIface, uIface)
-
 	for metric, oid := range metricOidStubs {
 		// Machine interface metrics
 		mOid := strings.Replace(oid, "IFACE", mIface, 1)
 		mVal := getOidUint64(snmp, mOid)
 		mIfDesc := getOidString(snmp, strings.Replace(ifDescOidStub, "IFACE", mIface, 1))
 		mIncrease := mVal - metricMachinePrevValues[metric]
-		fmt.Printf("Machine metric %v increase for %v: %v\n", metric, mIfDesc, mIncrease)
 		promMetrics[metric].WithLabelValues(hostname, mIfDesc).Add(float64(mIncrease))
 		metricMachinePrevValues[metric] = mVal
+		mSeries := machineMetricSeries[metric]
+		mSeries.Sample = append(mSeries.Sample, sample{Timestamp: time.Now().Unix(), Value: mIncrease})
+		machineMetricSeries[metric] = mSeries
 
 		// Uplink interface metrics
 		uOid := strings.Replace(oid, "IFACE", uIface, 1)
 		uVal := getOidUint64(snmp, uOid)
 		uIfDesc := getOidString(snmp, strings.Replace(ifDescOidStub, "IFACE", uIface, 1))
 		uIncrease := uVal - metricUplinkPrevValues[metric]
-		fmt.Printf("Uplink metric %v increase for %v: %v\n", metric, uIfDesc, uIncrease)
 		promMetrics[metric].WithLabelValues(hostname, uIfDesc).Add(float64(uIncrease))
 		metricUplinkPrevValues[metric] = uVal
+		uSeries := uplinkMetricSeries[metric]
+		uSeries.Sample = append(uSeries.Sample, sample{Timestamp: time.Now().Unix(), Value: uIncrease})
+		uplinkMetricSeries[metric] = uSeries
 	}
 
+}
+
+func writeMetrics() {
+	dirs := fmt.Sprintf("%v/%v", time.Now().Format("2006/01/06"), hostname)
+	os.MkdirAll(dirs, 0755)
+	startTime := seriesStartTime.Format("2006-01-06T15:04:05")
+	endTime := time.Now().Format("2006-01-06T15:04:05")
+	filename := fmt.Sprintf("%v-to-%v-switch.json", startTime, endTime)
+	filePath := fmt.Sprintf("%v/%v", dirs, filename)
+	f, _ := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	defer f.Close()
+	for _, mValue := range machineMetricSeries {
+		mData, _ := json.MarshalIndent(mValue, "", "    ")
+		f.Write(mData)
+	}
+	for _, uValue := range uplinkMetricSeries {
+		uData, _ := json.MarshalIndent(uValue, "", "    ")
+		f.Write(uData)
+	}
+	seriesStartTime = time.Now()
 }
 
 func getOidString(snmp *gosnmp.GoSNMP, oid string) string {
@@ -224,13 +351,21 @@ func main() {
 		log.Fatalf("Environment variable not set: DISCO_COMMUNITY")
 	}
 
-	cron := gocron.NewScheduler(time.UTC)
-	cron.Every(10).Seconds().Do(collectMetrics)
-	cron.StartAsync()
+	// Start everything at the top of a minute so that series collection windows
+	// are at the very least alighned to the minute.
+	for time.Now().Second() != 0 {
+		time.Sleep(1 * time.Second)
+	}
+
+	cronCollectMetrics := gocron.NewScheduler(time.UTC)
+	cronCollectMetrics.Every(10).Seconds().StartImmediately().Do(collectMetrics)
+	cronCollectMetrics.StartAsync()
+
+	cronWriteMetrics := gocron.NewScheduler(time.UTC)
+	cronWriteMetrics.Every(seriesDurationSeconds).Seconds().Do(writeMetrics)
+	cronWriteMetrics.StartAsync()
 
 	http.Handle("/metrics", promhttp.Handler())
-
-	fmt.Println("Set up Gocron job.")
 
 	srv := http.Server{
 		Addr:    *fListenAddress,
