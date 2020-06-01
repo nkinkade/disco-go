@@ -361,9 +361,8 @@ func main() {
 		log.Fatalf("Environment variable not set: DISCO_COMMUNITY")
 	}
 
-	// Start everything at the top of a minute so that series collection windows
-	// are at the very least alighned to the minute.
-	for time.Now().Second() != 0 {
+	// Start scraping on a clean 10s boundary within a minute.
+	for time.Now().Second()%10 != 0 {
 		time.Sleep(1 * time.Second)
 	}
 
