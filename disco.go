@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-co-op/gocron"
@@ -28,6 +29,7 @@ var (
 	mainCtx, mainCancel = context.WithCancel(context.Background())
 	logFatal            = log.Fatal
 	ifDescOidStub       = "1.3.6.1.2.1.2.2.1.2.IFACE"
+	mutex               sync.Mutex
 	metricOidStubs      = map[string]string{
 		"ifHCInOctets":             "1.3.6.1.2.1.31.1.1.1.6.IFACE",
 		"ifHCOutOctets":            "1.3.6.1.2.1.31.1.1.1.10.IFACE",
@@ -240,6 +242,10 @@ type series struct {
 }
 
 func collectMetrics() {
+	// Set a global lock to avoid a race between the collecting and writing of metrics.
+	mutex.Lock()
+	defer mutex.Unlock()
+
 	snmp := &gosnmp.GoSNMP{
 		Target:    target,
 		Port:      uint16(161),
@@ -289,6 +295,10 @@ func collectMetrics() {
 }
 
 func writeMetrics() {
+	// Set a global lock to avoid a race between the collecting and writing of metrics.
+	mutex.Lock()
+	defer mutex.Unlock()
+
 	dirs := fmt.Sprintf("%v/%v", time.Now().Format("2006/01/06"), hostname)
 	os.MkdirAll(dirs, 0755)
 	startTime := seriesStartTime.Format("2006-01-06T15:04:05")
