@@ -31,36 +31,42 @@ var (
 	ifDescOidStub       = "1.3.6.1.2.1.2.2.1.2.IFACE"
 	mutex               sync.Mutex
 	metricOidStubs      = map[string]string{
-		"ifHCInOctets":             "1.3.6.1.2.1.31.1.1.1.6.IFACE",
-		"ifHCOutOctets":            "1.3.6.1.2.1.31.1.1.1.10.IFACE",
-		"ifHCInUcastPkts":          "1.3.6.1.2.1.31.1.1.1.7.IFACE",
-		"ifHCOutUcastPkts":         "1.3.6.1.2.1.31.1.1.1.11.IFACE",
-		"ifInErrors":               "1.3.6.1.2.1.2.2.1.14.IFACE",
-		"ifOutErrors":              "1.3.6.1.2.1.2.2.1.20.IFACE",
-		"jnxCosQstatTotalDropPkts": "1.3.6.1.4.1.2636.3.15.4.1.53.IFACE.0",
+		"ifHCInOctets":     "1.3.6.1.2.1.31.1.1.1.6.IFACE",
+		"ifHCOutOctets":    "1.3.6.1.2.1.31.1.1.1.10.IFACE",
+		"ifHCInUcastPkts":  "1.3.6.1.2.1.31.1.1.1.7.IFACE",
+		"ifHCOutUcastPkts": "1.3.6.1.2.1.31.1.1.1.11.IFACE",
+		"ifInErrors":       "1.3.6.1.2.1.2.2.1.14.IFACE",
+		"ifOutErrors":      "1.3.6.1.2.1.2.2.1.20.IFACE",
+		"ifInDiscards":     "1.3.6.1.2.1.2.2.1.13.IFACE",
+		"ifOutDiscards":    "1.3.6.1.2.1.2.2.1.19.IFACE",
 	}
 
 	// Stores the last read values for each machine iface metric
 	metricMachinePrevValues = map[string]uint64{
-		"ifHCInOctets":             0,
-		"ifHCOutOctets":            0,
-		"ifHCInUcastPkts":          0,
-		"ifHCOutUcastPkts":         0,
-		"ifInErrors":               0,
-		"ifOutErrors":              0,
-		"jnxCosQstatTotalDropPkts": 0,
+		"ifHCInOctets":     0,
+		"ifHCOutOctets":    0,
+		"ifHCInUcastPkts":  0,
+		"ifHCOutUcastPkts": 0,
+		"ifInErrors":       0,
+		"ifOutErrors":      0,
+		"IfInDiscards":     0,
+		"IfOutDiscards":    0,
 	}
 
 	// Stores the last read values for each uplink iface metric
 	metricUplinkPrevValues = map[string]uint64{
-		"ifHCInOctets":             0,
-		"ifHCOutOctets":            0,
-		"ifHCInUcastPkts":          0,
-		"ifHCOutUcastPkts":         0,
-		"ifInErrors":               0,
-		"ifOutErrors":              0,
-		"jnxCosQstatTotalDropPkts": 0,
+		"ifHCInOctets":     0,
+		"ifHCOutOctets":    0,
+		"ifHCInUcastPkts":  0,
+		"ifHCOutUcastPkts": 0,
+		"ifInErrors":       0,
+		"ifOutErrors":      0,
+		"ifInDiscards":     0,
+		"ifOutDiscards":    0,
 	}
+
+	seriesStartTime              = time.Now()
+	seriesDurationSeconds uint64 = 60
 
 	promMetrics = map[string]*prometheus.CounterVec{
 		"ifHCInOctets": promauto.NewCounterVec(
@@ -123,10 +129,20 @@ var (
 				"interface",
 			},
 		),
-		"jnxCosQstatTotalDropPkts": promauto.NewCounterVec(
+		"ifInDiscards": promauto.NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "jnxCosQstatTotalDropPkts",
-				Help: "Dropped packets.",
+				Name: "ifInDiscards",
+				Help: "Ingress dropped packets.",
+			},
+			[]string{
+				"node",
+				"interface",
+			},
+		),
+		"ifOutDiscards": promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "ifOutDiscards",
+				Help: "Egress dropped packets.",
 			},
 			[]string{
 				"node",
@@ -134,9 +150,6 @@ var (
 			},
 		),
 	}
-
-	seriesStartTime              = time.Now()
-	seriesDurationSeconds uint64 = 60
 
 	uplinkMetricSeries = map[string]series{
 		"ifHCInOctets": series{
@@ -172,13 +185,19 @@ var (
 		"ifOutErrors": series{
 			Experiment: target,
 			Hostname:   hostname,
-			Metric:     "switch.errors.uplink.rx",
+			Metric:     "switch.errors.uplink.tx",
 			Sample:     []sample{},
 		},
-		"jnxCosQstatTotalDropPkts": series{
+		"ifInDiscards": series{
 			Experiment: target,
 			Hostname:   hostname,
-			Metric:     "switch.discards.uplink",
+			Metric:     "switch.discards.uplink.rx",
+			Sample:     []sample{},
+		},
+		"ifOutDiscards": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.discards.uplink.tx",
 			Sample:     []sample{},
 		},
 	}
@@ -217,13 +236,19 @@ var (
 		"ifOutErrors": series{
 			Experiment: target,
 			Hostname:   hostname,
-			Metric:     "switch.errors.local.rx",
+			Metric:     "switch.errors.local.tx",
 			Sample:     []sample{},
 		},
-		"jnxCosQstatTotalDropPkts": series{
+		"ifInDiscards": series{
 			Experiment: target,
 			Hostname:   hostname,
-			Metric:     "switch.discards.local",
+			Metric:     "switch.discards.local.rx",
+			Sample:     []sample{},
+		},
+		"ifOutDiscards": series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     "switch.discards.local.tx",
 			Sample:     []sample{},
 		},
 	}
