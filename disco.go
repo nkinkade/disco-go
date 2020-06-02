@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -17,241 +18,28 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/soniah/gosnmp"
+	"gopkg.in/yaml.v2"
 )
 
 var (
-	fListenAddress      = flag.String("web.listen-address", ":8888", "Address to listen on for telemetry.")
-	ifAliasOID          = "1.3.6.1.2.1.31.1.1.1.18"
-	hostname, _         = os.Hostname()
-	machine             = hostname[:5]
-	target              = os.Getenv("DISCO_TARGET")
-	community           = os.Getenv("DISCO_COMMUNITY")
-	mainCtx, mainCancel = context.WithCancel(context.Background())
-	logFatal            = log.Fatal
-	ifDescOidStub       = "1.3.6.1.2.1.2.2.1.2.IFACE"
-	mutex               sync.Mutex
-	metricOidStubs      = map[string]string{
-		"ifHCInOctets":     "1.3.6.1.2.1.31.1.1.1.6.IFACE",
-		"ifHCOutOctets":    "1.3.6.1.2.1.31.1.1.1.10.IFACE",
-		"ifHCInUcastPkts":  "1.3.6.1.2.1.31.1.1.1.7.IFACE",
-		"ifHCOutUcastPkts": "1.3.6.1.2.1.31.1.1.1.11.IFACE",
-		"ifInErrors":       "1.3.6.1.2.1.2.2.1.14.IFACE",
-		"ifOutErrors":      "1.3.6.1.2.1.2.2.1.20.IFACE",
-		"ifInDiscards":     "1.3.6.1.2.1.2.2.1.13.IFACE",
-		"ifOutDiscards":    "1.3.6.1.2.1.2.2.1.19.IFACE",
-	}
-
-	// Stores the last read values for each machine iface metric
-	metricMachinePrevValues = map[string]uint64{
-		"ifHCInOctets":     0,
-		"ifHCOutOctets":    0,
-		"ifHCInUcastPkts":  0,
-		"ifHCOutUcastPkts": 0,
-		"ifInErrors":       0,
-		"ifOutErrors":      0,
-		"IfInDiscards":     0,
-		"IfOutDiscards":    0,
-	}
-
-	// Stores the last read values for each uplink iface metric
-	metricUplinkPrevValues = map[string]uint64{
-		"ifHCInOctets":     0,
-		"ifHCOutOctets":    0,
-		"ifHCInUcastPkts":  0,
-		"ifHCOutUcastPkts": 0,
-		"ifInErrors":       0,
-		"ifOutErrors":      0,
-		"ifInDiscards":     0,
-		"ifOutDiscards":    0,
-	}
-
-	seriesStartTime              = time.Now()
-	seriesDurationSeconds uint64 = 60
-
-	promMetrics = map[string]*prometheus.CounterVec{
-		"ifHCInOctets": promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "ifHCInOctets",
-				Help: "Ingress octets.",
-			},
-			[]string{
-				"node",
-				"interface",
-			},
-		),
-		"ifHCOutOctets": promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "ifHCOutOctets",
-				Help: "Egress octets.",
-			},
-			[]string{
-				"node",
-				"interface",
-			},
-		),
-		"ifHCInUcastPkts": promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "ifHCInUcastPkts",
-				Help: "Ingress unicast packets.",
-			},
-			[]string{
-				"node",
-				"interface",
-			},
-		),
-		"ifHCOutUcastPkts": promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "ifHCOutUcastPkts",
-				Help: "Egress unicast packets.",
-			},
-			[]string{
-				"node",
-				"interface",
-			},
-		),
-		"ifInErrors": promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "ifInErrors",
-				Help: "Ingress errors.",
-			},
-			[]string{
-				"node",
-				"interface",
-			},
-		),
-		"ifOutErrors": promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "ifOutErrors",
-				Help: "Egress errors.",
-			},
-			[]string{
-				"node",
-				"interface",
-			},
-		),
-		"ifInDiscards": promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "ifInDiscards",
-				Help: "Ingress dropped packets.",
-			},
-			[]string{
-				"node",
-				"interface",
-			},
-		),
-		"ifOutDiscards": promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: "ifOutDiscards",
-				Help: "Egress dropped packets.",
-			},
-			[]string{
-				"node",
-				"interface",
-			},
-		),
-	}
-
-	uplinkMetricSeries = map[string]series{
-		"ifHCInOctets": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.octets.uplink.rx",
-			Sample:     []sample{},
-		},
-		"ifHCOutOctets": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.octets.uplink.tx",
-			Sample:     []sample{},
-		},
-		"ifHCInUcastPkts": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.unicast.uplink.rx",
-			Sample:     []sample{},
-		},
-		"ifHCOutUcastPkts": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.unicast.uplink.tx",
-			Sample:     []sample{},
-		},
-		"ifInErrors": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.errors.uplink.rx",
-			Sample:     []sample{},
-		},
-		"ifOutErrors": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.errors.uplink.tx",
-			Sample:     []sample{},
-		},
-		"ifInDiscards": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.discards.uplink.rx",
-			Sample:     []sample{},
-		},
-		"ifOutDiscards": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.discards.uplink.tx",
-			Sample:     []sample{},
-		},
-	}
-
-	machineMetricSeries = map[string]series{
-		"ifHCInOctets": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.octets.local.rx",
-			Sample:     []sample{},
-		},
-		"ifHCOutOctets": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.octets.local.tx",
-			Sample:     []sample{},
-		},
-		"ifHCInUcastPkts": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.unicast.local.rx",
-			Sample:     []sample{},
-		},
-		"ifHCOutUcastPkts": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.unicast.local.tx",
-			Sample:     []sample{},
-		},
-		"ifInErrors": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.errors.local.rx",
-			Sample:     []sample{},
-		},
-		"ifOutErrors": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.errors.local.tx",
-			Sample:     []sample{},
-		},
-		"ifInDiscards": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.discards.local.rx",
-			Sample:     []sample{},
-		},
-		"ifOutDiscards": series{
-			Experiment: target,
-			Hostname:   hostname,
-			Metric:     "switch.discards.local.tx",
-			Sample:     []sample{},
-		},
-	}
+	fListenAddress          = flag.String("web.listen-address", ":8888", "Address to listen on for telemetry.")
+	fMetricsFile            = flag.String("metrics", "", "Path to YAML file defining metrics to scrape.")
+	ifAliasOID              = "1.3.6.1.2.1.31.1.1.1.18"
+	hostname, _             = os.Hostname()
+	machine                 = hostname[:5]
+	target                  = os.Getenv("DISCO_TARGET")
+	community               = os.Getenv("DISCO_COMMUNITY")
+	mainCtx, mainCancel     = context.WithCancel(context.Background())
+	logFatal                = log.Fatal
+	ifDescOidStub           = "1.3.6.1.2.1.2.2.1.2.IFACE"
+	mutex                   sync.Mutex
+	seriesStartTime                = time.Now()
+	seriesDurationSeconds   uint64 = 60
+	metricUplinkPrevValues         = make(map[string]uint64)
+	metricMachinePrevValues        = make(map[string]uint64)
+	promMetrics                    = make(map[string]*prometheus.CounterVec)
+	uplinkMetricSeries             = make(map[string]series)
+	machineMetricSeries            = make(map[string]series)
 )
 
 type sample struct {
@@ -266,7 +54,17 @@ type series struct {
 	Sample     []sample `json:"sample"`
 }
 
-func collectMetrics() {
+type metricsConfig []metric
+
+type metric struct {
+	Name            string `yaml:"name"`
+	Description     string `yaml:"description"`
+	OidStub         string `yaml:"oidStub"`
+	MlabUplinkName  string `yaml:"mlabUplinkName"`
+	MlabMachineName string `yaml:"mlabMachineName"`
+}
+
+func collectMetrics(metrics metricsConfig) {
 	// Set a global lock to avoid a race between the collecting and writing of metrics.
 	mutex.Lock()
 	defer mutex.Unlock()
@@ -293,28 +91,28 @@ func collectMetrics() {
 
 	mIface, uIface := getIfaces(snmpPDUs)
 
-	for metric, oid := range metricOidStubs {
+	for _, metric := range metrics {
 		// Machine interface metrics
-		mOid := strings.Replace(oid, "IFACE", mIface, 1)
+		mOid := strings.Replace(metric.OidStub, "IFACE", mIface, 1)
 		mVal := getOidUint64(snmp, mOid)
 		mIfDesc := getOidString(snmp, strings.Replace(ifDescOidStub, "IFACE", mIface, 1))
-		mIncrease := mVal - metricMachinePrevValues[metric]
-		promMetrics[metric].WithLabelValues(hostname, mIfDesc).Add(float64(mIncrease))
-		metricMachinePrevValues[metric] = mVal
-		mSeries := machineMetricSeries[metric]
+		mIncrease := mVal - metricMachinePrevValues[metric.Name]
+		promMetrics[metric.Name].WithLabelValues(hostname, mIfDesc).Add(float64(mIncrease))
+		metricMachinePrevValues[metric.Name] = mVal
+		mSeries := machineMetricSeries[metric.Name]
 		mSeries.Sample = append(mSeries.Sample, sample{Timestamp: time.Now().Unix(), Value: mIncrease})
-		machineMetricSeries[metric] = mSeries
+		machineMetricSeries[metric.Name] = mSeries
 
 		// Uplink interface metrics
-		uOid := strings.Replace(oid, "IFACE", uIface, 1)
+		uOid := strings.Replace(metric.OidStub, "IFACE", uIface, 1)
 		uVal := getOidUint64(snmp, uOid)
 		uIfDesc := getOidString(snmp, strings.Replace(ifDescOidStub, "IFACE", uIface, 1))
-		uIncrease := uVal - metricUplinkPrevValues[metric]
-		promMetrics[metric].WithLabelValues(hostname, uIfDesc).Add(float64(uIncrease))
-		metricUplinkPrevValues[metric] = uVal
-		uSeries := uplinkMetricSeries[metric]
+		uIncrease := uVal - metricUplinkPrevValues[metric.Name]
+		promMetrics[metric.Name].WithLabelValues(hostname, uIfDesc).Add(float64(uIncrease))
+		metricUplinkPrevValues[metric.Name] = uVal
+		uSeries := uplinkMetricSeries[metric.Name]
 		uSeries.Sample = append(uSeries.Sample, sample{Timestamp: time.Now().Unix(), Value: uIncrease})
-		uplinkMetricSeries[metric] = uSeries
+		uplinkMetricSeries[metric.Name] = uSeries
 	}
 
 }
@@ -324,10 +122,10 @@ func writeMetrics() {
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	dirs := fmt.Sprintf("%v/%v", time.Now().Format("2006/01/06"), hostname)
+	dirs := fmt.Sprintf("%v/%v", time.Now().Format("2006/01/02"), hostname)
 	os.MkdirAll(dirs, 0755)
-	startTime := seriesStartTime.Format("2006-01-06T15:04:05")
-	endTime := time.Now().Format("2006-01-06T15:04:05")
+	startTime := seriesStartTime.Format("2006-01-02T15:04:05")
+	endTime := time.Now().Format("2006-01-02T15:04:05")
 	filename := fmt.Sprintf("%v-to-%v-switch.json", startTime, endTime)
 	filePath := fmt.Sprintf("%v/%v", dirs, filename)
 	f, _ := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -376,8 +174,54 @@ func getIfaces(pdus []gosnmp.SnmpPDU) (string, string) {
 	return machineIface, uplinkIface
 }
 
+func initializeMaps(metrics metricsConfig) {
+	for _, metric := range metrics {
+		metricUplinkPrevValues[metric.Name] = 0
+		metricMachinePrevValues[metric.Name] = 0
+
+		promMetrics[metric.Name] = promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: metric.Name,
+				Help: metric.Description,
+			},
+			[]string{
+				"node",
+				"interface",
+			},
+		)
+
+		uplinkMetricSeries[metric.Name] = series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     metric.MlabUplinkName,
+			Sample:     []sample{},
+		}
+
+		machineMetricSeries[metric.Name] = series{
+			Experiment: target,
+			Hostname:   hostname,
+			Metric:     metric.MlabMachineName,
+			Sample:     []sample{},
+		}
+	}
+}
+
 func main() {
+	var metrics metricsConfig
+
 	flag.Parse()
+
+	yamlFile, err := ioutil.ReadFile(*fMetricsFile)
+	if err != nil {
+		log.Fatalf("Error reading YAML config file %v: %s\n", fMetricsFile, err)
+	}
+
+	err = yaml.Unmarshal(yamlFile, &metrics)
+	if err != nil {
+		log.Fatalf("Error unmarshaling YAML config: %v\n", err)
+	}
+
+	initializeMaps(metrics)
 
 	if len(target) <= 0 {
 		log.Fatalf("Environment variable not set: DISCO_TARGET")
