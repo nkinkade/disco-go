@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nkinkade/disco-go/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/soniah/gosnmp"
@@ -30,7 +32,8 @@ type series struct {
 	Sample     []sample `json:"sample"`
 }
 
-type metrics struct {
+// Metrics comment.
+type Metrics struct {
 	metricUplinkPrevValues  map[string]uint64
 	metricMachinePrevValues map[string]uint64
 	promMetrics             map[string]*prometheus.CounterVec
@@ -89,7 +92,8 @@ func createOid(oidStub string, iface string) string {
 	return fmt.Sprintf("%v.%v", oidStub, iface)
 }
 
-func (metrics *metrics) Collect(snmp gosnmp.GoSNMP, config config.Config) {
+// Collect comment.
+func (metrics *Metrics) Collect(snmp gosnmp.GoSNMP, config config.Config) {
 	// Set a global lock to avoid a race between the collecting and writing of metrics.
 	metrics.mutex.Lock()
 	defer metrics.mutex.Unlock()
@@ -119,16 +123,18 @@ func (metrics *metrics) Collect(snmp gosnmp.GoSNMP, config config.Config) {
 	}
 }
 
-func (metrics *metrics) Write(startTime time.Time) {
+// Write comment.
+func (metrics *Metrics) Write(interval uint64) {
 	// Set a global lock to avoid a race between the collecting and writing of metrics.
 	metrics.mutex.Lock()
 	defer metrics.mutex.Unlock()
 
 	dirs := fmt.Sprintf("%v/%v", time.Now().Format("2006/01/02"), metrics.hostname)
 	os.MkdirAll(dirs, 0755)
-	startTime := startTime.Format("2006-01-02T15:04:05")
-	endTime := time.Now().Format("2006-01-02T15:04:05")
-	filename := fmt.Sprintf("%v-to-%v-switch.json", startTime, endTime)
+	startTime := time.Now().Add(int(time.Duration(interval) * -time.Second)
+	startTimeStr := startTime.Format("2006-01-02T15:04:05")
+	endTimeStr := time.Now().Format("2006-01-02T15:04:05")
+	filename := fmt.Sprintf("%v-to-%v-switch.json", startTimeStr, endTimeStr)
 	filePath := fmt.Sprintf("%v/%v", dirs, filename)
 	f, _ := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	defer f.Close()
@@ -136,26 +142,25 @@ func (metrics *metrics) Write(startTime time.Time) {
 		mData, _ := json.MarshalIndent(mValue, "", "    ")
 		f.Write(mData)
 	}
-	for _, uValue := range metrics.muplinkMetricSeries {
+	for _, uValue := range metrics.uplinkMetricSeries {
 		uData, _ := json.MarshalIndent(uValue, "", "    ")
 		f.Write(uData)
 	}
-	seriesStartTime = time.Now()
 }
 
-func New(snmp gosnmp.GoSNMP, config config.Config) metricMaps {
-	hostname, _ = os.Hostname()
-	machine = hostname[:5]
+// New implements metrics.
+func New(snmp gosnmp.GoSNMP, config config.Config, target string) Metrics {
+	hostname, _ := os.Hostname()
+	machine := hostname[:5]
 
 	machineIface, uplinkIface := getIfaces(snmp, machine)
 
-	metrics := metricMaps{
+	metrics := Metrics{
 		metricUplinkPrevValues:  make(map[string]uint64),
 		metricMachinePrevValues: make(map[string]uint64),
 		promMetrics:             make(map[string]*prometheus.CounterVec),
 		uplinkMetricSeries:      make(map[string]series),
 		machineMetricSeries:     make(map[string]series),
-		mutex:                   sync.Mutex,
 		hostname:                hostname,
 		machine:                 machine,
 		machineIface:            machineIface,

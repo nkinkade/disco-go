@@ -2,45 +2,41 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/go-co-op/gocron"
 	"github.com/nkinkade/disco-go/config"
+	"github.com/nkinkade/disco-go/metrics"
 	"github.com/soniah/gosnmp"
 )
 
 var (
+	community           = os.Getenv("DISCO_COMMUNITY")
 	fListenAddress      = flag.String("web.listen-address", ":8888", "Address to listen on for telemetry.")
 	fMetricsFile        = flag.String("metrics", "", "Path to YAML file defining metrics to scrape.")
 	fSeriesDuration     = flag.Uint64("series-duration", 60, "Interval in seconds to write out JSON files.")
-	target              = os.Getenv("DISCO_TARGET") // This can become a flag.
-	community           = os.Getenv("DISCO_COMMUNITY")
-	mainCtx, mainCancel = context.WithCancel(context.Background())
+	fTarget             = flag.String("target", "", "Switch FQDN to scrape metrics from.")
 	logFatal            = log.Fatal
-	seriesStartTime     = time.Now()
+	mainCtx, mainCancel = context.WithCancel(context.Background())
 )
 
 func main() {
 	flag.Parse()
 
-	if len(target) <= 0 {
-		log.Fatalf("Environment variable not set: DISCO_TARGET")
+	if len(*fTarget) <= 0 {
+		log.Fatalf("Target flag not set.")
 	}
 	if len(community) <= 0 {
 		log.Fatalf("Environment variable not set: DISCO_COMMUNITY")
 	}
 
-	// This should probably be moved to main() and the connnection kept open for the life of the daemon.
 	snmp := &gosnmp.GoSNMP{
-		Target:    target,
+		Target:    *fTarget,
 		Port:      uint16(161),
 		Community: community,
 		Version:   gosnmp.Version2c,
@@ -52,8 +48,8 @@ func main() {
 		log.Fatalf("Failed to connect to the SNMP server: %v\n", err)
 	}
 
-	config := config.New(fMetricsFile)
-	metrics := metrics.New(*snmp, *config)
+	config := config.New(*fMetricsFile)
+	metrics := metrics.New(*snmp, *config, *fTarget)
 
 	// Start scraping on a clean 10s boundary within a minute.
 	for time.Now().Second()%10 != 0 {
@@ -65,7 +61,7 @@ func main() {
 	cronCollectMetrics.StartAsync()
 
 	cronWriteMetrics := gocron.NewScheduler(time.UTC)
-	cronWriteMetrics.Every(fSeriesDuration).Seconds().Do(metrics.Write)
+	cronWriteMetrics.Every(fSeriesDuration).Seconds().Do(metrics.Write, *fSeriesDuration)
 	cronWriteMetrics.StartAsync()
 
 	http.Handle("/metrics", promhttp.Handler())
