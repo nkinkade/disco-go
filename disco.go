@@ -72,7 +72,7 @@ func main() {
 		Handler: http.DefaultServeMux,
 	}
 
-	fmt.Printf("Listening on port %v.\n", fListenAddress)
+	fmt.Printf("Listening on port %v.\n", *fListenAddress)
 
 	// When the context is canceled, stop serving.
 	go func() {
