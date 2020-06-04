@@ -71,10 +71,6 @@ func getIfaces(s gosnmp.GoSNMP, machine string) (string, string) {
 	return machineIface, uplinkIface
 }
 
-func putMetrics() {
-
-}
-
 func getOidString(snmp *gosnmp.GoSNMP, oid string) string {
 	result, _ := snmp.Get([]string{oid})
 	pdu := result.Variables[0]
@@ -90,6 +86,18 @@ func getOidUint64(snmp *gosnmp.GoSNMP, oid string) uint64 {
 
 func createOid(oidStub string, iface string) string {
 	return fmt.Sprintf("%v.%v", oidStub, iface)
+}
+
+func putMetrics(snmp gosnmp.GoSNMP, metric config.Metric, metricMap map[string]uint64, iface string) {
+	oid := createOid(metric.OidStub, iface)
+	mVal := getOidUint64(&snmp, oid)
+	mIfDesc := getOidString(&snmp, createOid(ifDescOidStub, metrics.machineIface))
+	mIncrease := mVal - metrics.metricMachinePrevValues[metric.Name]
+	metrics.promMetrics[metric.Name].WithLabelValues(metrics.hostname, mIfDesc).Add(float64(mIncrease))
+	metrics.metricMachinePrevValues[metric.Name] = mVal
+	mSeries := metrics.machineMetricSeries[metric.Name]
+	mSeries.Sample = append(mSeries.Sample, sample{Timestamp: time.Now().Unix(), Value: mIncrease})
+	metrics.machineMetricSeries[metric.Name] = mSeries
 }
 
 // Collect comment.
@@ -131,7 +139,7 @@ func (metrics *Metrics) Write(interval uint64) {
 
 	dirs := fmt.Sprintf("%v/%v", time.Now().Format("2006/01/02"), metrics.hostname)
 	os.MkdirAll(dirs, 0755)
-	startTime := time.Now().Add(int(time.Duration(interval) * -time.Second)
+	startTime := time.Now().Add(time.Duration(interval) * -time.Second)
 	startTimeStr := startTime.Format("2006-01-02T15:04:05")
 	endTimeStr := time.Now().Format("2006-01-02T15:04:05")
 	filename := fmt.Sprintf("%v-to-%v-switch.json", startTimeStr, endTimeStr)
@@ -149,13 +157,13 @@ func (metrics *Metrics) Write(interval uint64) {
 }
 
 // New implements metrics.
-func New(snmp gosnmp.GoSNMP, config config.Config, target string) Metrics {
+func New(snmp gosnmp.GoSNMP, config config.Config, target string) *Metrics {
 	hostname, _ := os.Hostname()
 	machine := hostname[:5]
 
 	machineIface, uplinkIface := getIfaces(snmp, machine)
 
-	metrics := Metrics{
+	metrics := &Metrics{
 		metricUplinkPrevValues:  make(map[string]uint64),
 		metricMachinePrevValues: make(map[string]uint64),
 		promMetrics:             make(map[string]*prometheus.CounterVec),

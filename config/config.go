@@ -8,10 +8,10 @@ import (
 )
 
 type Config struct {
-	Metrics []metric
+	Metrics []Metric
 }
 
-type metric struct {
+type Metric struct {
 	Name            string `yaml:"name"`
 	Description     string `yaml:"description"`
 	OidStub         string `yaml:"oidStub"`
