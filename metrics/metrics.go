@@ -34,14 +34,20 @@ type series struct {
 
 // Metrics comment.
 type Metrics struct {
-	metricsPrevValues map[string]map[string]uint64
-	metricsSeries     map[string]map[string]series
-	metricsPrometheus map[string]*prometheus.CounterVec
-	mutex             sync.Mutex
-	hostname          string
-	machine           string
-	machineIface      string
-	uplinkIface       string
+	oids     map[string]*oid
+	hostname string
+	machine  string
+	mutex    sync.Mutex
+}
+
+type oid struct {
+	name           string
+	previousValue  uint64
+	currentValue   uint64
+	scope          string
+	ifDescr        string
+	intervalSeries series
+	prom           *prometheus.CounterVec
 }
 
 func getIfaces(s gosnmp.GoSNMP, machine string) (string, string) {
@@ -76,38 +82,17 @@ func getOidString(snmp *gosnmp.GoSNMP, oid string) string {
 	return string(b)
 }
 
-func getOidUint64(snmp *gosnmp.GoSNMP, oid string) uint64 {
-	result, _ := snmp.Get([]string{oid})
-	pdu := result.Variables[0]
-	return gosnmp.ToBigInt(pdu.Value).Uint64()
+func getOidsUint64(snmp *gosnmp.GoSNMP, oids []string) map[string]uint64 {
+	oidMap := make(map[string]uint64)
+	result, _ := snmp.GetBulk(oids, uint8(len(oids)), 0)
+	for _, pdu := range result.Variables {
+		oidMap[pdu.Name] = gosnmp.ToBigInt(pdu.Value).Uint64()
+	}
+	return oidMap
 }
 
 func createOid(oidStub string, iface string) string {
 	return fmt.Sprintf("%v.%v", oidStub, iface)
-}
-
-func (metrics *Metrics) putMetrics(snmp gosnmp.GoSNMP, metric config.Metric, iface string, ifaceType string) {
-	oid := createOid(metric.OidStub, iface)
-	val := getOidUint64(&snmp, oid)
-	ifDescr := getOidString(&snmp, createOid(ifDescrOidStub, iface))
-	increase := val - metrics.metricsPrevValues[metric.Name][ifaceType]
-	metrics.metricsPrometheus[metric.Name].WithLabelValues(metrics.hostname, ifDescr).Add(float64(increase))
-	metrics.metricsPrevValues[metric.Name][ifaceType] = val
-	series := metrics.metricsSeries[metric.Name][ifaceType]
-	series.Sample = append(series.Sample, sample{Timestamp: time.Now().Unix(), Value: increase})
-	metrics.metricsSeries[metric.Name][ifaceType] = series
-}
-
-// Collect comment.
-func (metrics *Metrics) Collect(snmp gosnmp.GoSNMP, config config.Config) {
-	// Set a global lock to avoid a race between the collecting and writing of metrics.
-	metrics.mutex.Lock()
-	defer metrics.mutex.Unlock()
-
-	for _, metric := range config.Metrics {
-		metrics.putMetrics(snmp, metric, metrics.machineIface, "machine")
-		metrics.putMetrics(snmp, metric, metrics.uplinkIface, "uplink")
-	}
 }
 
 // Write comment.
@@ -121,15 +106,35 @@ func (metrics *Metrics) Write(interval uint64) {
 	startTime := time.Now().Add(time.Duration(interval) * -time.Second)
 	startTimeStr := startTime.Format("2006-01-02T15:04:05")
 	endTimeStr := time.Now().Format("2006-01-02T15:04:05")
-	filename := fmt.Sprintf("%v-to-%v-switch.json", startTimeStr, endTimeStr)
-	filePath := fmt.Sprintf("%v/%v", dirs, filename)
+	fileName := fmt.Sprintf("%v-to-%v-switch.json", startTimeStr, endTimeStr)
+	filePath := fmt.Sprintf("%v/%v", dirs, fileName)
 	f, _ := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	defer f.Close()
-	for _, metric := range metrics.metricsSeries {
-		mData, _ := json.MarshalIndent(metric["machine"], "", "    ")
-		f.Write(mData)
-		uData, _ := json.MarshalIndent(metric["uplink"], "", "    ")
-		f.Write(uData)
+	for _, values := range metrics.oids {
+		data, _ := json.MarshalIndent(values.intervalSeries, "", "    ")
+		f.Write(data)
+	}
+}
+
+// Collect comment.
+func (metrics *Metrics) Collect(snmp gosnmp.GoSNMP, config config.Config) {
+	// Set a global lock to avoid a race between the collecting and writing of metrics.
+	metrics.mutex.Lock()
+	defer metrics.mutex.Unlock()
+
+	oids := []string{}
+	for oid := range metrics.oids {
+		oids = append(oids, oid)
+	}
+	oidValueMap := getOidsUint64(&snmp, oids)
+
+	for oid, value := range oidValueMap {
+		increase := value - metrics.oids[oid].previousValue
+		metrics.oids[oid].prom.WithLabelValues(metrics.hostname, metrics.oids[oid].ifDescr).Add(float64(increase))
+		metrics.oids[oid].currentValue = increase
+		series := metrics.oids[oid].intervalSeries
+		series.Sample = append(series.Sample, sample{Timestamp: time.Now().Unix(), Value: increase})
+		metrics.oids[oid].intervalSeries = series
 	}
 }
 
@@ -137,51 +142,51 @@ func (metrics *Metrics) Write(interval uint64) {
 func New(snmp gosnmp.GoSNMP, config config.Config, target string) *Metrics {
 	hostname, _ := os.Hostname()
 	machine := hostname[:5]
-
 	machineIface, uplinkIface := getIfaces(snmp, machine)
 
-	metrics := &Metrics{
-		metricsPrevValues: make(map[string]map[string]uint64),
-		metricsSeries:     make(map[string]map[string]series),
-		metricsPrometheus: make(map[string]*prometheus.CounterVec),
-		hostname:          hostname,
-		machine:           machine,
-		machineIface:      machineIface,
-		uplinkIface:       uplinkIface,
+	iFaces := map[string]string{
+		"machine": machineIface,
+		"uplink":  uplinkIface,
+	}
+
+	m := &Metrics{
+		oids:     make(map[string]*oid),
+		hostname: hostname,
+		machine:  machine,
 	}
 
 	for _, metric := range config.Metrics {
-		metrics.metricsPrevValues[metric.Name] = map[string]uint64{
-			"machine": 0,
-			"uplink":  0,
+		discoNames := map[string]string{
+			"machine": metric.MlabMachineName,
+			"uplink":  metric.MlabUplinkName,
 		}
-
-		metrics.metricsPrometheus[metric.Name] = promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: metric.Name,
-				Help: metric.Description,
-			},
-			[]string{
-				"node",
-				"interface",
-			},
-		)
-
-		metrics.metricsSeries[metric.Name] = map[string]series{
-			"machine": series{
-				Experiment: target,
-				Hostname:   hostname,
-				Metric:     metric.MlabMachineName,
-				Sample:     []sample{},
-			},
-			"uplink": series{
-				Experiment: target,
-				Hostname:   hostname,
-				Metric:     metric.MlabUplinkName,
-				Sample:     []sample{},
-			},
+		for s, i := range iFaces {
+			oidStr := createOid(metric.OidStub, i)
+			o := &oid{
+				name:          metric.Name,
+				previousValue: 0,
+				currentValue:  0,
+				scope:         s,
+				intervalSeries: series{
+					Experiment: target,
+					Hostname:   hostname,
+					Metric:     discoNames[s],
+					Sample:     []sample{},
+				},
+				prom: promauto.NewCounterVec(
+					prometheus.CounterOpts{
+						Name: metric.Name,
+						Help: metric.Description,
+					},
+					[]string{
+						"node",
+						"interface",
+					},
+				),
+			}
+			m.oids[oidStr] = o
 		}
 	}
 
-	return metrics
+	return m
 }
