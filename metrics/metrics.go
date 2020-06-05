@@ -74,13 +74,19 @@ func getIfaces(snmp gosnmp.GoSNMP, machine string) map[string]map[string]string 
 		val := strings.TrimSpace(string(b))
 		if val == machine {
 			ifDescrOid := createOid(ifDescrOidStub, iface)
-			oidMap := getOidsString(&snmp, []string{ifDescrOid})
+			oidMap, err := getOidsString(&snmp, []string{ifDescrOid})
+			if err != nil {
+				log.Fatalf("Failed to determine the machine interface ifDescr: %v", err)
+			}
 			ifaces["machine"]["ifDescr"] = oidMap[ifDescrOid]
 			ifaces["machine"]["iface"] = iface
 		}
 		if strings.HasPrefix(val, "uplink") {
 			ifDescrOid := createOid(ifDescrOidStub, iface)
-			oidMap := getOidsString(&snmp, []string{ifDescrOid})
+			oidMap, err := getOidsString(&snmp, []string{ifDescrOid})
+			if err != nil {
+				log.Fatalf("Failed to determine the uplink interface ifDescr: %v", err)
+			}
 			ifaces["uplink"]["ifDescr"] = oidMap[ifDescrOid]
 			ifaces["uplink"]["iface"] = iface
 		}
@@ -89,22 +95,22 @@ func getIfaces(snmp gosnmp.GoSNMP, machine string) map[string]map[string]string 
 	return ifaces
 }
 
-func getOidsString(snmp *gosnmp.GoSNMP, oids []string) map[string]string {
+func getOidsString(snmp *gosnmp.GoSNMP, oids []string) (map[string]string, error) {
 	oidMap := make(map[string]string)
-	result, _ := snmp.Get(oids)
+	result, err := snmp.Get(oids)
 	for _, pdu := range result.Variables {
 		oidMap[pdu.Name] = string(pdu.Value.([]byte))
 	}
-	return oidMap
+	return oidMap, err
 }
 
-func getOidsUint64(snmp *gosnmp.GoSNMP, oids []string) map[string]uint64 {
+func getOidsUint64(snmp *gosnmp.GoSNMP, oids []string) (map[string]uint64, error) {
 	oidMap := make(map[string]uint64)
-	result, _ := snmp.Get(oids)
+	result, err := snmp.Get(oids)
 	for _, pdu := range result.Variables {
 		oidMap[pdu.Name] = gosnmp.ToBigInt(pdu.Value).Uint64()
 	}
-	return oidMap
+	return oidMap, err
 }
 
 func createOid(oidStub string, iface string) string {
@@ -118,17 +124,32 @@ func (metrics *Metrics) Write(interval uint64) {
 	defer metrics.mutex.Unlock()
 
 	dirs := fmt.Sprintf("%v/%v", time.Now().Format("2006/01/02"), metrics.hostname)
-	os.MkdirAll(dirs, 0755)
+	err := os.MkdirAll(dirs, 0755)
+	if err != nil {
+		log.Fatalf("Failed to create output directory (%v): %v", dirs, err)
+	}
 	startTime := time.Now().Add(time.Duration(interval) * -time.Second)
 	startTimeStr := startTime.Format("2006-01-02T15:04:05")
 	endTimeStr := time.Now().Format("2006-01-02T15:04:05")
 	fileName := fmt.Sprintf("%v-to-%v-switch.json", startTimeStr, endTimeStr)
 	filePath := fmt.Sprintf("%v/%v", dirs, fileName)
-	f, _ := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Fatalf("Failed to open metrics file (%v): %v", filePath, err)
+	}
 	defer f.Close()
 	for oid, values := range metrics.oids {
-		data, _ := json.MarshalIndent(values.intervalSeries, "", "    ")
-		f.Write(data)
+		data, err := json.MarshalIndent(values.intervalSeries, "", "    ")
+		if err != nil {
+			log.Fatalf("Failed to marshal metrics for writing: %v", err)
+		}
+		_, err = f.Write(data)
+		if err != nil {
+			log.Fatalf("Failed to write metrics data to file (%v): %v", filePath, err)
+		}
+		// This is less than ideal. Because we can't write to a map in a struct
+		// we have to copy the whole map, modify it and then overwrite the
+		// original map. There is likely a better way to do this.
 		metricsOid := metrics.oids[oid]
 		metricsOid.intervalSeries = series{}
 		metrics.oids[oid] = metricsOid
@@ -145,13 +166,20 @@ func (metrics *Metrics) Collect(snmp gosnmp.GoSNMP, config config.Config) {
 	for oid := range metrics.oids {
 		oids = append(oids, oid)
 	}
-	oidValueMap := getOidsUint64(&snmp, oids)
+	oidValueMap, err := getOidsUint64(&snmp, oids)
+	if err != nil {
+		log.Printf("ERROR: failed to GET OIDs (%v)from SNMP server: %v", oids, err)
+		// TODO(kinkade): increment some sort of error metric here.
+	}
 
 	for oid, value := range oidValueMap {
 		increase := value - metrics.oids[oid].previousValue
 		ifDescr := metrics.oids[oid].ifDescr
 		metricName := metrics.oids[oid].name
 		metrics.prom[metricName].WithLabelValues(metrics.hostname, ifDescr).Add(float64(increase))
+		// This is less than ideal. Because we can't write to a map in a struct
+		// we have to copy the whole map, modify it and then overwrite the
+		// original map. There is likely a better way to do this.
 		metricOid := metrics.oids[oid]
 		metricOid.previousValue = value
 		metricOid.intervalSeries.Samples = append(
@@ -164,8 +192,12 @@ func (metrics *Metrics) Collect(snmp gosnmp.GoSNMP, config config.Config) {
 
 // New implements metrics.
 func New(snmp gosnmp.GoSNMP, config config.Config, target string) *Metrics {
-	hostname, _ := os.Hostname()
-	machine := hostname[:5]
+	hostname, err := os.Hostname()
+	if err != nil {
+		log.Fatalf("Failed to determine the hostname of the system: %v", err)
+	}
+	//machine := hostname[:5]
+	machine := "mlab2"
 	ifaces := getIfaces(snmp, machine)
 
 	m := &Metrics{

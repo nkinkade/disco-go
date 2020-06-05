@@ -29,9 +29,6 @@ var (
 func main() {
 	flag.Parse()
 
-	if len(*fTarget) <= 0 {
-		log.Fatalf("Target flag not set.")
-	}
 	if len(community) <= 0 {
 		log.Fatalf("Environment variable not set: DISCO_COMMUNITY")
 	}

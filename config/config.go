@@ -25,7 +25,7 @@ func New(yamlFile string) Config {
 
 	yamlData, err := ioutil.ReadFile(yamlFile)
 	if err != nil {
-		log.Fatalf("Error reading YAML config file %v: %s\n", yamlFile, err)
+		log.Fatalf("Error reading YAML config file %v: %v\n", yamlFile, err)
 	}
 
 	err = yaml.Unmarshal(yamlData, &c.Metrics)
