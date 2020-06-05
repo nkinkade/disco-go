@@ -39,6 +39,7 @@ type Metrics struct {
 	hostname string
 	machine  string
 	mutex    sync.Mutex
+	firstRun bool
 }
 
 type oid struct {
@@ -151,7 +152,7 @@ func (metrics *Metrics) Write(interval uint64) {
 		// we have to copy the whole map, modify it and then overwrite the
 		// original map. There is likely a better way to do this.
 		metricsOid := metrics.oids[oid]
-		metricsOid.intervalSeries = series{}
+		metricsOid.intervalSeries.Samples = []sample{}
 		metrics.oids[oid] = metricsOid
 	}
 }
@@ -168,25 +169,39 @@ func (metrics *Metrics) Collect(snmp gosnmp.GoSNMP, config config.Config) {
 	}
 	oidValueMap, err := getOidsUint64(&snmp, oids)
 	if err != nil {
-		log.Printf("ERROR: failed to GET OIDs (%v)from SNMP server: %v", oids, err)
+		log.Printf("ERROR: failed to GET OIDs (%v) from SNMP server: %v", oids, err)
 		// TODO(kinkade): increment some sort of error metric here.
+		return
 	}
 
 	for oid, value := range oidValueMap {
-		increase := value - metrics.oids[oid].previousValue
-		ifDescr := metrics.oids[oid].ifDescr
-		metricName := metrics.oids[oid].name
-		metrics.prom[metricName].WithLabelValues(metrics.hostname, ifDescr).Add(float64(increase))
 		// This is less than ideal. Because we can't write to a map in a struct
 		// we have to copy the whole map, modify it and then overwrite the
 		// original map. There is likely a better way to do this.
 		metricOid := metrics.oids[oid]
 		metricOid.previousValue = value
+
+		// If this is the first run then we have no previousValue with which to
+		// calculate an increase, so we just record a previousValue and return.
+		if metrics.firstRun == true {
+			metrics.oids[oid] = metricOid
+			continue
+		}
+
+		increase := value - metrics.oids[oid].previousValue
+		ifDescr := metrics.oids[oid].ifDescr
+		metricName := metrics.oids[oid].name
+		metrics.prom[metricName].WithLabelValues(metrics.hostname, ifDescr).Add(float64(increase))
+
 		metricOid.intervalSeries.Samples = append(
 			metricOid.intervalSeries.Samples,
 			sample{Timestamp: time.Now().Unix(), Value: increase},
 		)
 		metrics.oids[oid] = metricOid
+	}
+
+	if metrics.firstRun == true {
+		metrics.firstRun = false
 	}
 }
 
@@ -205,6 +220,7 @@ func New(snmp gosnmp.GoSNMP, config config.Config, target string) *Metrics {
 		prom:     make(map[string]*prometheus.CounterVec),
 		hostname: hostname,
 		machine:  machine,
+		firstRun: true,
 	}
 
 	for _, metric := range config.Metrics {
@@ -215,10 +231,9 @@ func New(snmp gosnmp.GoSNMP, config config.Config, target string) *Metrics {
 		for scope, values := range ifaces {
 			oidStr := createOid(metric.OidStub, values["iface"])
 			o := oid{
-				name:          metric.Name,
-				previousValue: 0,
-				scope:         scope,
-				ifDescr:       values["ifDescr"],
+				name:    metric.Name,
+				scope:   scope,
+				ifDescr: values["ifDescr"],
 				intervalSeries: series{
 					Experiment: target,
 					Hostname:   hostname,
