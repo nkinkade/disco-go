@@ -1,7 +1,6 @@
 package metrics
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nkinkade/disco-go/archive"
 	"github.com/nkinkade/disco-go/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -20,18 +20,6 @@ const (
 	ifDescrOidStub = ".1.3.6.1.2.1.2.2.1.2"
 )
 
-type sample struct {
-	Timestamp int64  `json:"timestamp"`
-	Value     uint64 `json:"value"`
-}
-
-type series struct {
-	Experiment string   `json:"experiment"`
-	Hostname   string   `json:"hostname"`
-	Metric     string   `json:"metric"`
-	Samples    []sample `json:"sample"`
-}
-
 // Metrics comment.
 type Metrics struct {
 	oids     map[string]oid
@@ -39,6 +27,7 @@ type Metrics struct {
 	hostname string
 	machine  string
 	mutex    sync.Mutex
+	// TODO(kinkade): remove this field in favor of a more elegant solution.
 	firstRun bool
 }
 
@@ -47,7 +36,7 @@ type oid struct {
 	previousValue  uint64
 	scope          string
 	ifDescr        string
-	intervalSeries series
+	intervalSeries archive.Model
 }
 
 func getIfaces(snmp gosnmp.GoSNMP, machine string) map[string]map[string]string {
@@ -118,48 +107,9 @@ func createOid(oidStub string, iface string) string {
 	return fmt.Sprintf("%v.%v", oidStub, iface)
 }
 
-// Write comment.
-func (metrics *Metrics) Write(interval uint64) {
-	// Set a global lock to avoid a race between the collecting and writing of metrics.
-	metrics.mutex.Lock()
-	defer metrics.mutex.Unlock()
-
-	dirs := fmt.Sprintf("%v/%v", time.Now().Format("2006/01/02"), metrics.hostname)
-	err := os.MkdirAll(dirs, 0755)
-	if err != nil {
-		log.Fatalf("Failed to create output directory (%v): %v", dirs, err)
-	}
-	startTime := time.Now().Add(time.Duration(interval) * -time.Second)
-	startTimeStr := startTime.Format("2006-01-02T15:04:05")
-	endTimeStr := time.Now().Format("2006-01-02T15:04:05")
-	fileName := fmt.Sprintf("%v-to-%v-switch.json", startTimeStr, endTimeStr)
-	filePath := fmt.Sprintf("%v/%v", dirs, fileName)
-	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Fatalf("Failed to open metrics file (%v): %v", filePath, err)
-	}
-	defer f.Close()
-	for oid, values := range metrics.oids {
-		data, err := json.MarshalIndent(values.intervalSeries, "", "    ")
-		if err != nil {
-			log.Fatalf("Failed to marshal metrics for writing: %v", err)
-		}
-		_, err = f.Write(data)
-		if err != nil {
-			log.Fatalf("Failed to write metrics data to file (%v): %v", filePath, err)
-		}
-		// This is less than ideal. Because we can't write to a map in a struct
-		// we have to copy the whole map, modify it and then overwrite the
-		// original map. There is likely a better way to do this.
-		metricsOid := metrics.oids[oid]
-		metricsOid.intervalSeries.Samples = []sample{}
-		metrics.oids[oid] = metricsOid
-	}
-}
-
 // Collect comment.
 func (metrics *Metrics) Collect(snmp gosnmp.GoSNMP, config config.Config) {
-	// Set a global lock to avoid a race between the collecting and writing of metrics.
+	// Set a lock to avoid a race between the collecting and writing of metrics.
 	metrics.mutex.Lock()
 	defer metrics.mutex.Unlock()
 
@@ -195,13 +145,30 @@ func (metrics *Metrics) Collect(snmp gosnmp.GoSNMP, config config.Config) {
 
 		metricOid.intervalSeries.Samples = append(
 			metricOid.intervalSeries.Samples,
-			sample{Timestamp: time.Now().Unix(), Value: increase},
+			archive.Sample{Timestamp: time.Now().Unix(), Value: increase},
 		)
 		metrics.oids[oid] = metricOid
 	}
 
 	if metrics.firstRun == true {
 		metrics.firstRun = false
+	}
+}
+
+// Write comment.
+func (metrics *Metrics) Write(interval uint64) {
+	// Set a lock to avoid a race between the collecting and writing of metrics.
+	metrics.mutex.Lock()
+	defer metrics.mutex.Unlock()
+
+	for oid, values := range metrics.oids {
+		archive.Write(values.intervalSeries, interval)
+		// This is less than ideal. Because we can't write to a map in a struct
+		// we have to copy the whole map, modify it and then overwrite the
+		// original map. There is likely a better way to do this.
+		metricsOid := metrics.oids[oid]
+		metricsOid.intervalSeries.Samples = []archive.Sample{}
+		metrics.oids[oid] = metricsOid
 	}
 }
 
@@ -234,11 +201,11 @@ func New(snmp gosnmp.GoSNMP, config config.Config, target string) *Metrics {
 				name:    metric.Name,
 				scope:   scope,
 				ifDescr: values["ifDescr"],
-				intervalSeries: series{
+				intervalSeries: archive.Model{
 					Experiment: target,
 					Hostname:   hostname,
 					Metric:     discoNames[scope],
-					Samples:    []sample{},
+					Samples:    []archive.Sample{},
 				},
 			}
 			m.oids[oidStr] = o
