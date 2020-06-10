@@ -11,8 +11,8 @@ import (
 
 	"github.com/go-co-op/gocron"
 	"github.com/nkinkade/disco-go/config"
-	"github.com/nkinkade/disco-go/iface"
 	"github.com/nkinkade/disco-go/metrics"
+	"github.com/nkinkade/disco-go/snmp"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/soniah/gosnmp"
 )
@@ -34,7 +34,7 @@ func main() {
 		log.Fatalf("Environment variable not set: DISCO_COMMUNITY")
 	}
 
-	snmp := &gosnmp.GoSNMP{
+	goSNMP := &gosnmp.GoSNMP{
 		Target:    *fTarget,
 		Port:      uint16(161),
 		Community: community,
@@ -42,14 +42,14 @@ func main() {
 		Timeout:   time.Duration(2) * time.Second,
 		Retries:   1,
 	}
-	err := snmp.Connect()
+	err := goSNMP.Connect()
 	if err != nil {
 		log.Fatalf("Failed to connect to the SNMP server: %v\n", err)
 	}
 
 	config := config.New(*fMetricsFile)
-	snmpapi := iface.NewSNMP(snmp)
-	metrics := metrics.New(snmpapi, config, *fTarget)
+	client := snmp.Client(goSNMP)
+	metrics := metrics.New(client, config, *fTarget)
 
 	// Start scraping on a clean 10s boundary within a minute.
 	for time.Now().Second()%10 != 0 {
@@ -57,7 +57,7 @@ func main() {
 	}
 
 	cronCollectMetrics := gocron.NewScheduler(time.UTC)
-	cronCollectMetrics.Every(10).Seconds().StartImmediately().Do(metrics.Collect, snmpapi, config)
+	cronCollectMetrics.Every(10).Seconds().StartImmediately().Do(metrics.Collect, client, config)
 	cronCollectMetrics.StartAsync()
 
 	cronWriteMetrics := gocron.NewScheduler(time.UTC)
@@ -76,7 +76,7 @@ func main() {
 	// When the context is canceled, stop serving.
 	go func() {
 		<-mainCtx.Done()
-		snmp.Conn.Close()
+		goSNMP.Conn.Close()
 		srv.Close()
 	}()
 

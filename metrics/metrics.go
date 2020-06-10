@@ -10,7 +10,7 @@ import (
 
 	"github.com/nkinkade/disco-go/archive"
 	"github.com/nkinkade/disco-go/config"
-	"github.com/nkinkade/disco-go/iface"
+	"github.com/nkinkade/disco-go/snmp"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -39,10 +39,10 @@ type oid struct {
 	intervalSeries archive.Model
 }
 
-func getIfaces(snmp *iface.SNMPImpl, machine string) map[string]map[string]string {
+func getIfaces(snmp snmp.SNMP, machine string) map[string]map[string]string {
 	pdus, err := snmp.BulkWalkAll(ifAliasOid)
 	if err != nil {
-		log.Fatalf("Failed to walk to the ifAlias OID: %v\n", err)
+		log.Fatalf("Failed to walk the ifAlias OID: %v\n", err)
 	}
 
 	ifaces := map[string]map[string]string{
@@ -85,7 +85,7 @@ func getIfaces(snmp *iface.SNMPImpl, machine string) map[string]map[string]strin
 	return ifaces
 }
 
-func getOidsString(snmp *iface.SNMPImpl, oids []string) (map[string]string, error) {
+func getOidsString(snmp snmp.SNMP, oids []string) (map[string]string, error) {
 	oidMap := make(map[string]string)
 	result, err := snmp.Get(oids)
 	for _, pdu := range result.Variables {
@@ -96,7 +96,7 @@ func getOidsString(snmp *iface.SNMPImpl, oids []string) (map[string]string, erro
 
 // Counter32 OIDs seem to be presented as type uint, while Counter64 OIDs seem
 // to be presented as type uint64.
-func getOidsInt(snmp *iface.SNMPImpl, oids []string) (map[string]uint64,
+func getOidsInt(snmp snmp.SNMP, oids []string) (map[string]uint64,
 	error) {
 	oidMap := make(map[string]uint64)
 	result, err := snmp.Get(oids)
@@ -118,7 +118,7 @@ func createOid(oidStub string, iface string) string {
 }
 
 // Collect comment.
-func (metrics *Metrics) Collect(snmp *iface.SNMPImpl, config config.Config) {
+func (metrics *Metrics) Collect(snmp snmp.SNMP, config config.Config) {
 	// Set a lock to avoid a race between the collecting and writing of metrics.
 	metrics.mutex.Lock()
 	defer metrics.mutex.Unlock()
@@ -183,12 +183,13 @@ func (metrics *Metrics) Write(interval uint64) {
 }
 
 // New implements metrics.
-func New(snmp *iface.SNMPImpl, config config.Config, target string) *Metrics {
+func New(snmp snmp.SNMP, config config.Config, target string) *Metrics {
 	hostname, err := os.Hostname()
 	if err != nil {
 		log.Fatalf("Failed to determine the hostname of the system: %v", err)
 	}
-	machine := hostname[:5]
+	//machine := hostname[:5]
+	machine := "mlab2"
 	ifaces := getIfaces(snmp, machine)
 
 	m := &Metrics{

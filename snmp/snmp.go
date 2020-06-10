@@ -1,4 +1,4 @@
-package iface
+package snmp
 
 import (
 	"github.com/soniah/gosnmp"
@@ -10,24 +10,24 @@ type SNMP interface {
 	Get(oids []string) (result *gosnmp.SnmpPacket, err error)
 }
 
-// SNMPImpl comment.
-type SNMPImpl struct {
+// RealSNMP comment.
+type RealSNMP struct {
 	GoSNMP *gosnmp.GoSNMP
 }
 
 // BulkWalkAll comment.
-func (s *SNMPImpl) BulkWalkAll(rootOid string) (results []gosnmp.SnmpPDU, err error) {
+func (s *RealSNMP) BulkWalkAll(rootOid string) (results []gosnmp.SnmpPDU, err error) {
 	return s.GoSNMP.BulkWalkAll(rootOid)
 }
 
 // Get comment.
-func (s *SNMPImpl) Get(oids []string) (results *gosnmp.SnmpPacket, err error) {
+func (s *RealSNMP) Get(oids []string) (results *gosnmp.SnmpPacket, err error) {
 	return s.GoSNMP.Get(oids)
 }
 
-// NewSNMP comment
-func NewSNMP(s *gosnmp.GoSNMP) *SNMPImpl {
-	return &SNMPImpl{
+// Client comment.
+func Client(s *gosnmp.GoSNMP) *RealSNMP {
+	return &RealSNMP{
 		GoSNMP: s,
 	}
 }
