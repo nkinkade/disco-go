@@ -3,9 +3,10 @@ package archive
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"time"
+
+	"github.com/m-lab/go/rtx"
 )
 
 // Sample comment.
@@ -22,13 +23,18 @@ type Model struct {
 	Samples    []Sample `json:"sample"`
 }
 
+// GetJSON comment.
+func GetJSON(m Model) []byte {
+	data, err := json.MarshalIndent(m, "", "    ")
+	rtx.Must(err, "Failed to marshal archive model to JSON")
+	return data
+}
+
 // Write comment.
-func Write(m Model, interval uint64) {
-	dirs := fmt.Sprintf("%v/%v", time.Now().Format("2006/01/02"), m.Hostname)
+func Write(hostname string, data []byte, interval uint64) {
+	dirs := fmt.Sprintf("%v/%v", time.Now().Format("2006/01/02"), hostname)
 	err := os.MkdirAll(dirs, 0755)
-	if err != nil {
-		log.Fatalf("Failed to create archive output directory (%v): %v", dirs, err)
-	}
+	rtx.Must(err, "Failed to create archive output directory")
 
 	// Calculate the start time, which will be Now() - interval, and then format
 	// the archive file name based on the calculated values.
@@ -39,17 +45,9 @@ func Write(m Model, interval uint64) {
 	filePath := fmt.Sprintf("%v/%v", dirs, fileName)
 
 	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		log.Fatalf("Failed to open archive file (%v): %v", filePath, err)
-	}
+	rtx.Must(err, "Failed to open archive file")
 	defer f.Close()
 
-	data, err := json.MarshalIndent(m, "", "    ")
-	if err != nil {
-		log.Fatalf("Failed to marshal archive model for writing: %v", err)
-	}
 	_, err = f.Write(data)
-	if err != nil {
-		log.Fatalf("Failed to write archive model data to file (%v): %v", filePath, err)
-	}
+	rtx.Must(err, "Failed to write archive model data to file")
 }

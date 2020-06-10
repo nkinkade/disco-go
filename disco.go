@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-co-op/gocron"
+	"github.com/m-lab/go/rtx"
 	"github.com/nkinkade/disco-go/config"
 	"github.com/nkinkade/disco-go/metrics"
 	"github.com/nkinkade/disco-go/snmp"
@@ -43,9 +44,7 @@ func main() {
 		Retries:   1,
 	}
 	err := goSNMP.Connect()
-	if err != nil {
-		log.Fatalf("Failed to connect to the SNMP server: %v\n", err)
-	}
+	rtx.Must(err, "Failed to connect to the SNMP server")
 
 	config := config.New(*fMetricsFile)
 	client := snmp.Client(goSNMP)

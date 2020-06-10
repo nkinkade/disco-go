@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/m-lab/go/rtx"
 	"github.com/nkinkade/disco-go/archive"
 	"github.com/nkinkade/disco-go/config"
 	"github.com/nkinkade/disco-go/snmp"
@@ -41,9 +42,7 @@ type oid struct {
 
 func getIfaces(snmp snmp.SNMP, machine string) map[string]map[string]string {
 	pdus, err := snmp.BulkWalkAll(ifAliasOid)
-	if err != nil {
-		log.Fatalf("Failed to walk the ifAlias OID: %v\n", err)
-	}
+	rtx.Must(err, "Failed to walk the ifAlias OID")
 
 	ifaces := map[string]map[string]string{
 		"machine": map[string]string{
@@ -65,18 +64,14 @@ func getIfaces(snmp snmp.SNMP, machine string) map[string]map[string]string {
 		if val == machine {
 			ifDescrOid := createOid(ifDescrOidStub, iface)
 			oidMap, err := getOidsString(snmp, []string{ifDescrOid})
-			if err != nil {
-				log.Fatalf("Failed to determine the machine interface ifDescr: %v", err)
-			}
+			rtx.Must(err, "Failed to determine the machine interface ifDescr")
 			ifaces["machine"]["ifDescr"] = oidMap[ifDescrOid]
 			ifaces["machine"]["iface"] = iface
 		}
 		if strings.HasPrefix(val, "uplink") {
 			ifDescrOid := createOid(ifDescrOidStub, iface)
 			oidMap, err := getOidsString(snmp, []string{ifDescrOid})
-			if err != nil {
-				log.Fatalf("Failed to determine the uplink interface ifDescr: %v", err)
-			}
+			rtx.Must(err, "Failed to determine the uplink interface ifDescr")
 			ifaces["uplink"]["ifDescr"] = oidMap[ifDescrOid]
 			ifaces["uplink"]["iface"] = iface
 		}
@@ -167,12 +162,16 @@ func (metrics *Metrics) Collect(snmp snmp.SNMP, config config.Config) {
 
 // Write comment.
 func (metrics *Metrics) Write(interval uint64) {
+	var jsonData []byte
+
 	// Set a lock to avoid a race between the collecting and writing of metrics.
 	metrics.mutex.Lock()
 	defer metrics.mutex.Unlock()
 
 	for oid, values := range metrics.oids {
-		archive.Write(values.intervalSeries, interval)
+		data := archive.GetJSON(values.intervalSeries)
+		jsonData = append(jsonData, data...)
+
 		// This is less than ideal. Because we can't write to a map in a struct
 		// we have to copy the whole map, modify it and then overwrite the
 		// original map. There is likely a better way to do this.
@@ -180,14 +179,14 @@ func (metrics *Metrics) Write(interval uint64) {
 		metricsOid.intervalSeries.Samples = []archive.Sample{}
 		metrics.oids[oid] = metricsOid
 	}
+
+	archive.Write(metrics.hostname, jsonData, interval)
 }
 
 // New implements metrics.
 func New(snmp snmp.SNMP, config config.Config, target string) *Metrics {
 	hostname, err := os.Hostname()
-	if err != nil {
-		log.Fatalf("Failed to determine the hostname of the system: %v", err)
-	}
+	rtx.Must(err, "Failed to determine the hostname of the system")
 	//machine := hostname[:5]
 	machine := "mlab2"
 	ifaces := getIfaces(snmp, machine)
