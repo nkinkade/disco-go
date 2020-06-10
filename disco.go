@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-co-op/gocron"
 	"github.com/nkinkade/disco-go/config"
+	"github.com/nkinkade/disco-go/iface"
 	"github.com/nkinkade/disco-go/metrics"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/soniah/gosnmp"
@@ -47,7 +48,8 @@ func main() {
 	}
 
 	config := config.New(*fMetricsFile)
-	metrics := metrics.New(*snmp, config, *fTarget)
+	snmpapi := iface.NewSNMP(snmp)
+	metrics := metrics.New(snmpapi, config, *fTarget)
 
 	// Start scraping on a clean 10s boundary within a minute.
 	for time.Now().Second()%10 != 0 {
@@ -55,7 +57,7 @@ func main() {
 	}
 
 	cronCollectMetrics := gocron.NewScheduler(time.UTC)
-	cronCollectMetrics.Every(10).Seconds().StartImmediately().Do(metrics.Collect, *snmp, config)
+	cronCollectMetrics.Every(10).Seconds().StartImmediately().Do(metrics.Collect, snmpapi, config)
 	cronCollectMetrics.StartAsync()
 
 	cronWriteMetrics := gocron.NewScheduler(time.UTC)

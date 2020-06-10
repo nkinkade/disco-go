@@ -10,6 +10,7 @@ import (
 
 	"github.com/nkinkade/disco-go/archive"
 	"github.com/nkinkade/disco-go/config"
+	"github.com/nkinkade/disco-go/iface"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/soniah/gosnmp"
@@ -39,7 +40,7 @@ type oid struct {
 	intervalSeries archive.Model
 }
 
-func getIfaces(snmp gosnmp.GoSNMP, machine string) map[string]map[string]string {
+func getIfaces(snmp *iface.SNMPImpl, machine string) map[string]map[string]string {
 	pdus, err := snmp.BulkWalkAll(ifAliasOid)
 	if err != nil {
 		log.Fatalf("Failed to walk to the ifAlias OID: %v\n", err)
@@ -64,7 +65,7 @@ func getIfaces(snmp gosnmp.GoSNMP, machine string) map[string]map[string]string 
 		val := strings.TrimSpace(string(b))
 		if val == machine {
 			ifDescrOid := createOid(ifDescrOidStub, iface)
-			oidMap, err := getOidsString(&snmp, []string{ifDescrOid})
+			oidMap, err := getOidsString(snmp, []string{ifDescrOid})
 			if err != nil {
 				log.Fatalf("Failed to determine the machine interface ifDescr: %v", err)
 			}
@@ -73,7 +74,7 @@ func getIfaces(snmp gosnmp.GoSNMP, machine string) map[string]map[string]string 
 		}
 		if strings.HasPrefix(val, "uplink") {
 			ifDescrOid := createOid(ifDescrOidStub, iface)
-			oidMap, err := getOidsString(&snmp, []string{ifDescrOid})
+			oidMap, err := getOidsString(snmp, []string{ifDescrOid})
 			if err != nil {
 				log.Fatalf("Failed to determine the uplink interface ifDescr: %v", err)
 			}
@@ -85,7 +86,7 @@ func getIfaces(snmp gosnmp.GoSNMP, machine string) map[string]map[string]string 
 	return ifaces
 }
 
-func getOidsString(snmp *gosnmp.GoSNMP, oids []string) (map[string]string, error) {
+func getOidsString(snmp *iface.SNMPImpl, oids []string) (map[string]string, error) {
 	oidMap := make(map[string]string)
 	result, err := snmp.Get(oids)
 	for _, pdu := range result.Variables {
@@ -94,7 +95,7 @@ func getOidsString(snmp *gosnmp.GoSNMP, oids []string) (map[string]string, error
 	return oidMap, err
 }
 
-func getOidsUint64(snmp *gosnmp.GoSNMP, oids []string) (map[string]uint64, error) {
+func getOidsUint64(snmp *iface.SNMPImpl, oids []string) (map[string]uint64, error) {
 	oidMap := make(map[string]uint64)
 	result, err := snmp.Get(oids)
 	for _, pdu := range result.Variables {
@@ -108,7 +109,7 @@ func createOid(oidStub string, iface string) string {
 }
 
 // Collect comment.
-func (metrics *Metrics) Collect(snmp gosnmp.GoSNMP, config config.Config) {
+func (metrics *Metrics) Collect(snmp *iface.SNMPImpl, config config.Config) {
 	// Set a lock to avoid a race between the collecting and writing of metrics.
 	metrics.mutex.Lock()
 	defer metrics.mutex.Unlock()
@@ -117,7 +118,7 @@ func (metrics *Metrics) Collect(snmp gosnmp.GoSNMP, config config.Config) {
 	for oid := range metrics.oids {
 		oids = append(oids, oid)
 	}
-	oidValueMap, err := getOidsUint64(&snmp, oids)
+	oidValueMap, err := getOidsUint64(snmp, oids)
 	if err != nil {
 		log.Printf("ERROR: failed to GET OIDs (%v) from SNMP server: %v", oids, err)
 		// TODO(kinkade): increment some sort of error metric here.
@@ -173,13 +174,12 @@ func (metrics *Metrics) Write(interval uint64) {
 }
 
 // New implements metrics.
-func New(snmp gosnmp.GoSNMP, config config.Config, target string) *Metrics {
+func New(snmp *iface.SNMPImpl, config config.Config, target string) *Metrics {
 	hostname, err := os.Hostname()
 	if err != nil {
 		log.Fatalf("Failed to determine the hostname of the system: %v", err)
 	}
-	//machine := hostname[:5]
-	machine := "mlab2"
+	machine := hostname[:5]
 	ifaces := getIfaces(snmp, machine)
 
 	m := &Metrics{
