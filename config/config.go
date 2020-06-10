@@ -7,12 +7,12 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-// Config comment.
+// Config represents a collection of Metrics.
 type Config struct {
 	Metrics []Metric
 }
 
-// Metric comment.
+// Metric represents all the information needed for an SNMP metric.
 type Metric struct {
 	Name            string `yaml:"name"`
 	Description     string `yaml:"description"`
@@ -21,7 +21,7 @@ type Metric struct {
 	MlabMachineName string `yaml:"mlabMachineName"`
 }
 
-// New returns a new config struct.
+// New returns a new Config struct.
 func New(yamlFile string) Config {
 	var c Config
 

@@ -21,7 +21,7 @@ const (
 	ifDescrOidStub = ".1.3.6.1.2.1.2.2.1.2"
 )
 
-// Metrics comment.
+// Metrics represents a collection of oids, plus additional data about the environment.
 type Metrics struct {
 	oids     map[string]oid
 	prom     map[string]*prometheus.CounterVec
@@ -40,6 +40,8 @@ type oid struct {
 	intervalSeries archive.Model
 }
 
+// getIfaces uses an ifAlias value to determine the logical interface number and
+// description for the machine's interface and the switch's uplink.
 func getIfaces(snmp snmp.SNMP, machine string) map[string]map[string]string {
 	pdus, err := snmp.BulkWalkAll(ifAliasOid)
 	rtx.Must(err, "Failed to walk the ifAlias OID")
@@ -80,6 +82,8 @@ func getIfaces(snmp snmp.SNMP, machine string) map[string]map[string]string {
 	return ifaces
 }
 
+// getOidsString accepts a list of OIDS and returns a map of the OIDs to their
+// string values.
 func getOidsString(snmp snmp.SNMP, oids []string) (map[string]string, error) {
 	oidMap := make(map[string]string)
 	result, err := snmp.Get(oids)
@@ -89,9 +93,12 @@ func getOidsString(snmp snmp.SNMP, oids []string) (map[string]string, error) {
 	return oidMap, err
 }
 
+// getOidsInt64 accepts a list of OIDS and returns a map of the OIDs to their
+// various int-type values, with all values being cast to a uint64.
+//
 // Counter32 OIDs seem to be presented as type uint, while Counter64 OIDs seem
 // to be presented as type uint64.
-func getOidsInt(snmp snmp.SNMP, oids []string) (map[string]uint64,
+func getOidsInt64(snmp snmp.SNMP, oids []string) (map[string]uint64,
 	error) {
 	oidMap := make(map[string]uint64)
 	result, err := snmp.Get(oids)
@@ -108,11 +115,15 @@ func getOidsInt(snmp snmp.SNMP, oids []string) (map[string]uint64,
 	return oidMap, err
 }
 
+// createOid joins and OID stub with a logical interface number, returning the
+// complete OID.
 func createOid(oidStub string, iface string) string {
 	return fmt.Sprintf("%v.%v", oidStub, iface)
 }
 
-// Collect comment.
+// Collect scrapes values for a list of OIDs and updates a map of OIDs,
+// appending a new archive.Sample representing the increase from the previous
+// scrape to an array of samples for that OID.
 func (metrics *Metrics) Collect(snmp snmp.SNMP, config config.Config) {
 	// Set a lock to avoid a race between the collecting and writing of metrics.
 	metrics.mutex.Lock()
@@ -122,7 +133,7 @@ func (metrics *Metrics) Collect(snmp snmp.SNMP, config config.Config) {
 	for oid := range metrics.oids {
 		oids = append(oids, oid)
 	}
-	oidValueMap, err := getOidsInt(snmp, oids)
+	oidValueMap, err := getOidsInt64(snmp, oids)
 	if err != nil {
 		log.Printf("ERROR: failed to GET OIDs (%v) from SNMP server: %v", oids, err)
 		// TODO(kinkade): increment some sort of error metric here.
@@ -160,7 +171,7 @@ func (metrics *Metrics) Collect(snmp snmp.SNMP, config config.Config) {
 	}
 }
 
-// Write comment.
+// Write collects JSON data for all OIDs and then writes the result to an archive.
 func (metrics *Metrics) Write(interval uint64) {
 	var jsonData []byte
 
@@ -183,7 +194,7 @@ func (metrics *Metrics) Write(interval uint64) {
 	archive.Write(metrics.hostname, jsonData, interval)
 }
 
-// New implements metrics.
+// New creates a new metrics.Metrics struct with various OID maps initialized.
 func New(snmp snmp.SNMP, config config.Config, target string) *Metrics {
 	hostname, err := os.Hostname()
 	rtx.Must(err, "Failed to determine the hostname of the system")
