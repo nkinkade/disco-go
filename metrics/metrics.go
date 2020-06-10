@@ -13,7 +13,6 @@ import (
 	"github.com/nkinkade/disco-go/iface"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"github.com/soniah/gosnmp"
 )
 
 const (
@@ -95,11 +94,21 @@ func getOidsString(snmp *iface.SNMPImpl, oids []string) (map[string]string, erro
 	return oidMap, err
 }
 
-func getOidsUint64(snmp *iface.SNMPImpl, oids []string) (map[string]uint64, error) {
+// Counter32 OIDs seem to be presented as type uint, while Counter64 OIDs seem
+// to be presented as type uint64.
+func getOidsInt(snmp *iface.SNMPImpl, oids []string) (map[string]uint64,
+	error) {
 	oidMap := make(map[string]uint64)
 	result, err := snmp.Get(oids)
 	for _, pdu := range result.Variables {
-		oidMap[pdu.Name] = gosnmp.ToBigInt(pdu.Value).Uint64()
+		switch value := pdu.Value.(type) {
+		case uint:
+			oidMap[pdu.Name] = uint64(value)
+		case uint64:
+			oidMap[pdu.Name] = value
+		default:
+			log.Fatalf("Unknown type %T of SNMP type %v for OID %v\n", value, pdu.Type, pdu.Name)
+		}
 	}
 	return oidMap, err
 }
@@ -118,7 +127,7 @@ func (metrics *Metrics) Collect(snmp *iface.SNMPImpl, config config.Config) {
 	for oid := range metrics.oids {
 		oids = append(oids, oid)
 	}
-	oidValueMap, err := getOidsUint64(snmp, oids)
+	oidValueMap, err := getOidsInt(snmp, oids)
 	if err != nil {
 		log.Printf("ERROR: failed to GET OIDs (%v) from SNMP server: %v", oids, err)
 		// TODO(kinkade): increment some sort of error metric here.
