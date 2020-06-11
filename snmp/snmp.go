@@ -17,8 +17,7 @@ type RealSNMP struct {
 
 // BulkWalkAll performs an SNMP BulkWalk operation for an OID, returning an
 // array of all values.
-func (s *RealSNMP) BulkWalkAll(rootOid string) (results []gosnmp.SnmpPDU, err
-error) {
+func (s *RealSNMP) BulkWalkAll(rootOid string) (results []gosnmp.SnmpPDU, err error) {
 	return s.GoSNMP.BulkWalkAll(rootOid)
 }
 

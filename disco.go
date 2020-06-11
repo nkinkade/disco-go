@@ -46,7 +46,8 @@ func main() {
 	err := goSNMP.Connect()
 	rtx.Must(err, "Failed to connect to the SNMP server")
 
-	config := config.New(*fMetricsFile)
+	config, err := config.New(*fMetricsFile)
+	rtx.Must("Could not create new metrics configuration")
 	client := snmp.Client(goSNMP)
 	metrics := metrics.New(client, config, *fTarget)
 

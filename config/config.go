@@ -2,8 +2,8 @@ package config
 
 import (
 	"io/ioutil"
+	"log"
 
-	"github.com/m-lab/go/rtx"
 	"gopkg.in/yaml.v2"
 )
 
@@ -22,14 +22,20 @@ type Metric struct {
 }
 
 // New returns a new Config struct.
-func New(yamlFile string) Config {
+func New(yamlFile string) (Config, error) {
 	var c Config
 
 	yamlData, err := ioutil.ReadFile(yamlFile)
-	rtx.Must(err, "Error reading YAML metrics config file")
+	if err != nil {
+		log.Printf("Error reading YAML metrics config file %v: %v", yamlFile, err)
+		return c, err
+	}
 
-	err = yaml.Unmarshal(yamlData, &c.Metrics)
-	rtx.Must(err, "Error unmarshaling YAML metrics config")
+	err = yaml.UnmarshalStrict(yamlData, &c.Metrics)
+	if err != nil {
+		log.Printf("Error unmarshaling YAML metrics config: %v", err)
+		return c, err
+	}
 
-	return c
+	return c, err
 }
