@@ -3,7 +3,6 @@ package metrics
 import (
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -180,7 +179,8 @@ func (metrics *Metrics) Write(interval uint64) {
 	defer metrics.mutex.Unlock()
 
 	for oid, values := range metrics.oids {
-		data := archive.GetJSON(values.intervalSeries)
+		data, err := archive.GetJSON(values.intervalSeries)
+		rtx.Must(err, "Failed to GetJSON for intervalSeries")
 		jsonData = append(jsonData, data...)
 
 		// This is less than ideal. Because we can't write to a map in a struct
@@ -191,15 +191,16 @@ func (metrics *Metrics) Write(interval uint64) {
 		metrics.oids[oid] = metricsOid
 	}
 
-	archive.Write(metrics.hostname, jsonData, interval)
+	archivePath := archive.GetPath(time.Now(), metrics.hostname, interval)
+	err := archive.Write(archivePath, jsonData)
+	if err != nil {
+		rtx.Must(err, "Failed to write archive")
+	}
 }
 
 // New creates a new metrics.Metrics struct with various OID maps initialized.
-func New(snmp snmp.SNMP, config config.Config, target string) *Metrics {
-	hostname, err := os.Hostname()
-	rtx.Must(err, "Failed to determine the hostname of the system")
-	//machine := hostname[:5]
-	machine := "mlab2"
+func New(snmp snmp.SNMP, config config.Config, target string, hostname string) *Metrics {
+	machine := hostname[:5]
 	ifaces := getIfaces(snmp, machine)
 
 	m := &Metrics{

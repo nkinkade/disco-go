@@ -35,6 +35,10 @@ func main() {
 		log.Fatalf("Environment variable not set: DISCO_COMMUNITY")
 	}
 
+	//hostname, err := os.Hostname()
+	//rtx.Must(err, "Failed to determine the hostname of the system")
+	hostname := "mlab2.lga0t.mlab-sandbox.measurement-lab.org"
+
 	goSNMP := &gosnmp.GoSNMP{
 		Target:    *fTarget,
 		Port:      uint16(161),
@@ -47,9 +51,9 @@ func main() {
 	rtx.Must(err, "Failed to connect to the SNMP server")
 
 	config, err := config.New(*fMetricsFile)
-	rtx.Must("Could not create new metrics configuration")
+	rtx.Must(err, "Could not create new metrics configuration")
 	client := snmp.Client(goSNMP)
-	metrics := metrics.New(client, config, *fTarget)
+	metrics := metrics.New(client, config, *fTarget, hostname)
 
 	// Start scraping on a clean 10s boundary within a minute.
 	for time.Now().Second()%10 != 0 {

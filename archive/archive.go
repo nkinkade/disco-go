@@ -3,7 +3,10 @@ package archive
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"log"
 	"os"
+	"path"
 	"time"
 
 	"github.com/m-lab/go/rtx"
@@ -24,30 +27,42 @@ type Model struct {
 }
 
 // GetJSON accepts a Model object and returns marshalled JSON.
-func GetJSON(m Model) []byte {
+func GetJSON(m Model) ([]byte, error) {
 	data, err := json.MarshalIndent(m, "", "    ")
-	rtx.Must(err, "Failed to marshal archive model to JSON")
-	return data
+	rtx.Must(err, "ERROR: failed to marshal archive.Model to JSON. This should never happen")
+	return data, err
 }
 
-// Write writes out JSON data to a file on disk.
-func Write(hostname string, data []byte, interval uint64) {
-	dirs := fmt.Sprintf("%v/%v", time.Now().Format("2006/01/02"), hostname)
-	err := os.MkdirAll(dirs, 0755)
-	rtx.Must(err, "Failed to create archive output directory")
+// GetPath returns a relative filesystem path where an archive should be written.
+func GetPath(now time.Time, hostname string, interval uint64) string {
+	// The directory path where the archive should be written.
+	dirs := fmt.Sprintf("%v/%v", now.Format("2006/01/02"), hostname)
 
 	// Calculate the start time, which will be Now() - interval, and then format
 	// the archive file name based on the calculated values.
-	startTime := time.Now().Add(time.Duration(interval) * -time.Second)
+	startTime := now.Add(time.Duration(interval) * -time.Second)
 	startTimeStr := startTime.Format("2006-01-02T15:04:05")
-	endTimeStr := time.Now().Format("2006-01-02T15:04:05")
-	fileName := fmt.Sprintf("%v-to-%v-switch.json", startTimeStr, endTimeStr)
-	filePath := fmt.Sprintf("%v/%v", dirs, fileName)
+	endTimeStr := now.Format("2006-01-02T15:04:05")
+	archiveName := fmt.Sprintf("%v-to-%v-switch.json", startTimeStr, endTimeStr)
+	archivePath := fmt.Sprintf("%v/%v", dirs, archiveName)
 
-	f, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	rtx.Must(err, "Failed to open archive file")
-	defer f.Close()
+	return archivePath
+}
 
-	_, err = f.Write(data)
-	rtx.Must(err, "Failed to write archive model data to file")
+// Write writes out JSON data to a file on disk.
+func Write(archivePath string, data []byte) error {
+	dirPath := path.Dir(archivePath)
+	err := os.MkdirAll(dirPath, 0755)
+	if err != nil {
+		log.Printf("ERROR: failed to create archive directory path '%v': %v", dirPath, err)
+		return err
+	}
+
+	err = ioutil.WriteFile(archivePath, data, 0644)
+	if err != nil {
+		log.Printf("ERROR: failed to write archive file '%v': %v", archivePath, err)
+		return err
+	}
+
+	return nil
 }

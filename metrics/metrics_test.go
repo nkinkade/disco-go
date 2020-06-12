@@ -6,6 +6,7 @@ import (
 
 	"github.com/nkinkade/disco-go/archive"
 	"github.com/nkinkade/disco-go/config"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/soniah/gosnmp"
 )
 
@@ -52,17 +53,17 @@ var snmpPacketUplink = gosnmp.SnmpPacket{
 	},
 }
 
-var snmpPacketMetrics = gosnmp.SnmpPacket{
+var snmpPacketMetricsRun1 = gosnmp.SnmpPacket{
 	Variables: []gosnmp.SnmpPDU{
 		{
 			// ifOutDicards machine
-			Name:  ".1.3.6.1.2.1.2.2.1.19.524.",
+			Name:  ".1.3.6.1.2.1.2.2.1.19.524",
 			Type:  gosnmp.Counter32,
 			Value: uint(0),
 		},
 		{
 			// ifOutDiscards uplink
-			Name:  ".1.3.6.1.2.1.2.2.1.19.568.",
+			Name:  ".1.3.6.1.2.1.2.2.1.19.568",
 			Type:  gosnmp.Counter32,
 			Value: uint(3),
 		},
@@ -77,6 +78,35 @@ var snmpPacketMetrics = gosnmp.SnmpPacket{
 			Name:  ".1.3.6.1.2.1.31.1.1.1.6.568",
 			Type:  gosnmp.Counter64,
 			Value: uint64(437),
+		},
+	},
+}
+
+var snmpPacketMetricsRun2 = gosnmp.SnmpPacket{
+	Variables: []gosnmp.SnmpPDU{
+		{
+			// ifOutDicards machine
+			Name:  ".1.3.6.1.2.1.2.2.1.19.524",
+			Type:  gosnmp.Counter32,
+			Value: uint(0),
+		},
+		{
+			// ifOutDiscards uplink
+			Name:  ".1.3.6.1.2.1.2.2.1.19.568",
+			Type:  gosnmp.Counter32,
+			Value: uint(8),
+		},
+		{
+			// ifHCInOctets machine
+			Name:  ".1.3.6.1.2.1.31.1.1.1.6.524",
+			Type:  gosnmp.Counter64,
+			Value: uint64(511),
+		},
+		{
+			// ifHCInOctets uplink
+			Name:  ".1.3.6.1.2.1.31.1.1.1.6.568",
+			Type:  gosnmp.Counter64,
+			Value: uint64(624),
 		},
 	},
 }
@@ -134,6 +164,7 @@ var expectedMetricsOIDs = map[string]oid{
 
 type mockRealSNMP struct {
 	err error
+	run int
 }
 
 func (m *mockRealSNMP) BulkWalkAll(rootOid string) (results []gosnmp.SnmpPDU, err error) {
@@ -166,14 +197,21 @@ func (m *mockRealSNMP) Get(oids []string) (result *gosnmp.SnmpPacket, err error)
 
 	// len(oids) will be greater than one when looking up metrics.
 	if len(oids) > 1 {
-		packet = &snmpPacketMetrics
+		if m.run == 1 {
+			packet = &snmpPacketMetricsRun1
+		}
+		if m.run == 2 {
+			packet = &snmpPacketMetricsRun2
+		}
 	}
 
 	return packet, m.err
 }
 
 func Test_New(t *testing.T) {
-	s := &mockRealSNMP{
+	prometheus.DefaultRegisterer = prometheus.NewRegistry()
+
+	var s = &mockRealSNMP{
 		err: nil,
 	}
 	m := New(s, c, target, hostname)
@@ -197,24 +235,71 @@ func Test_New(t *testing.T) {
 }
 
 func Test_Collect(t *testing.T) {
-	s := &mockRealSNMP{
+	prometheus.DefaultRegisterer = prometheus.NewRegistry()
+
+	var expectedValues = map[string]map[string]uint64{
+		".1.3.6.1.2.1.2.2.1.19.524": map[string]uint64{
+			"run1Prev":   0,
+			"run2Prev":   0,
+			"run2Sample": 0,
+		},
+		".1.3.6.1.2.1.2.2.1.19.568": map[string]uint64{
+			"run1Prev":   3,
+			"run2Prev":   8,
+			"run2Sample": 5,
+		},
+		".1.3.6.1.2.1.31.1.1.1.6.524": map[string]uint64{
+			"run1Prev":   275,
+			"run2Prev":   511,
+			"run2Sample": 236,
+		},
+		".1.3.6.1.2.1.31.1.1.1.6.568": map[string]uint64{
+			"run1Prev":   437,
+			"run2Prev":   624,
+			"run2Sample": 187,
+		},
+	}
+
+	s1 := &mockRealSNMP{
 		err: nil,
+		run: 1,
 	}
-	m := New(s, c, target, hostname)
+	m := New(s1, c, target, hostname)
+	m.Collect(s1, c)
 
-	m.Collect(s, c)
+	for oid := range m.oids {
+		// Be sure that previousValues is what we expect.
+		if m.oids[oid].previousValue != expectedValues[oid]["run1Prev"] {
+			t.Errorf("For OID %v expected a previousValue of %v after run1 but got: %v",
+				oid, expectedValues[oid]["run1Prev"], m.oids[oid].previousValue)
+		}
+		// Be sure that the number of samples is what we expect.
+		if len(m.oids[oid].intervalSeries.Samples) != 0 {
+			t.Errorf("For OID %v expected 0 samples after run1, but got: %v", oid, len(m.oids[oid].intervalSeries.Samples))
+		}
+	}
 
-	if m.oids[".1.3.6.1.2.1.2.2.1.19.524"].previousValue != 0 {
-		t.Errorf("Expected previousValue of 0 for ifOutDiscards  for machine but got: %v", m.oids[".1.3.6.1.2.1.2.2.1.19.524."].previousValue)
+	s2 := &mockRealSNMP{
+		err: nil,
+		run: 2,
 	}
-	if m.oids[".1.3.6.1.2.1.2.2.1.19.568"].previousValue != 3 {
-		t.Errorf("Expected previousValue of 3 for ifOutDiscards for uplink but got: %v", m.oids[".1.3.6.1.2.1.2.2.1.19.568."].previousValue)
-	}
-	if m.oids[".1.3.6.1.2.1.31.1.1.1.6.524"].previousValue != 275 {
-		t.Errorf("Expected previousValue of 275 for ifHCInOctets for machine but got: %v", m.oids[".1.3.6.1.2.1.31.1.1.1.6.524"].previousValue)
-	}
-	if m.oids[".1.3.6.1.2.1.31.1.1.1.6.568"].previousValue != 437 {
-		t.Errorf("Expected previousValue of 437 for ifHCInOctets for uplink but got: %v", m.oids[".1.3.6.1.2.1.31.1.1.1.6.568"].previousValue)
+	m.Collect(s2, c)
+
+	for oid := range m.oids {
+		// Be sure that previousValues is what we expect.
+		if m.oids[oid].previousValue != expectedValues[oid]["run2Prev"] {
+			t.Errorf("For OID %v expected a previousValue of %v after run2 but got: %v",
+				oid, expectedValues[oid]["run2Prev"], m.oids[oid].previousValue)
+		}
+		// Be sure that the number of samples is what we expect.
+		if len(m.oids[oid].intervalSeries.Samples) != 1 {
+			t.Errorf("For OID %v expected 1 samples after run2, but got: %v", oid, len(m.oids[oid].intervalSeries.Samples))
+		}
+
+		if m.oids[oid].intervalSeries.Samples[0].Value != expectedValues[oid]["run2Sample"] {
+			t.Errorf("For OID %v expected a sample value of %v after run2 but got: %v",
+				oid, expectedValues[oid]["run2Sample"], m.oids[oid].intervalSeries.Samples[0].Value)
+		}
 	}
 
 }

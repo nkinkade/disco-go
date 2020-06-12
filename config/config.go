@@ -27,13 +27,13 @@ func New(yamlFile string) (Config, error) {
 
 	yamlData, err := ioutil.ReadFile(yamlFile)
 	if err != nil {
-		log.Printf("Error reading YAML metrics config file %v: %v", yamlFile, err)
+		log.Printf("ERROR: failed to read YAML metrics config file '%v': %v", yamlFile, err)
 		return c, err
 	}
 
 	err = yaml.UnmarshalStrict(yamlData, &c.Metrics)
 	if err != nil {
-		log.Printf("Error unmarshaling YAML metrics config: %v", err)
+		log.Printf("ERROR: failed to unmarshal YAML metrics config: %v", err)
 		return c, err
 	}
 
