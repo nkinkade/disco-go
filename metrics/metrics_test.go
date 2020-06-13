@@ -1,13 +1,32 @@
 package metrics
 
 import (
+	"fmt"
+	"io/ioutil"
+	"os"
+	"path"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/m-lab/go/rtx"
 	"github.com/nkinkade/disco-go/archive"
 	"github.com/nkinkade/disco-go/config"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/soniah/gosnmp"
+)
+
+const (
+	sysUpTimeOID            = ".1.3.6.1.2.1.1.3.0"
+	ifDescrMachineOID       = ".1.3.6.1.2.1.2.2.1.2.524"
+	ifDescrUplinkOID        = ".1.3.6.1.2.1.2.2.1.2.568"
+	ifHCInOctetsOidStub     = ".1.3.6.1.2.1.31.1.1.1.6"
+	ifHCInOctetsMachineOID  = ".1.3.6.1.2.1.31.1.1.1.6.524"
+	ifHCInOctetsUplinkOID   = ".1.3.6.1.2.1.31.1.1.1.6.568"
+	ifOutDiscardsOidStub    = ".1.3.6.1.2.1.2.2.1.19"
+	ifOutDiscardsMachineOID = ".1.3.6.1.2.1.2.2.1.19.524"
+	ifOutDiscardsUplinkOID  = ".1.3.6.1.2.1.2.2.1.19.568"
 )
 
 var target = "s1-abc0t.measurement-lab.org"
@@ -19,14 +38,14 @@ var c = config.Config{
 		config.Metric{
 			Name:            "ifHCInOctets",
 			Description:     "Ingress octets.",
-			OidStub:         ".1.3.6.1.2.1.31.1.1.1.6",
+			OidStub:         ifHCInOctetsOidStub,
 			MlabUplinkName:  "switch.octets.uplink.rx",
 			MlabMachineName: "switch.octets.local.rx",
 		},
 		config.Metric{
 			Name:            "ifOutDiscards",
 			Description:     "Egress discards.",
-			OidStub:         ".1.3.6.1.2.1.2.2.1.19",
+			OidStub:         ifOutDiscardsOidStub,
 			MlabUplinkName:  "switch.discards.uplink.tx",
 			MlabMachineName: "switch.discards.local.tx",
 		},
@@ -36,7 +55,7 @@ var c = config.Config{
 var snmpPacketMachine = gosnmp.SnmpPacket{
 	Variables: []gosnmp.SnmpPDU{
 		{
-			Name:  ".1.3.6.1.2.1.2.2.1.2.524",
+			Name:  ifDescrMachineOID,
 			Type:  gosnmp.OctetString,
 			Value: []byte("xe-0/0/12"),
 		},
@@ -46,9 +65,19 @@ var snmpPacketMachine = gosnmp.SnmpPacket{
 var snmpPacketUplink = gosnmp.SnmpPacket{
 	Variables: []gosnmp.SnmpPDU{
 		{
-			Name:  ".1.3.6.1.2.1.2.2.1.2.568",
+			Name:  ifDescrUplinkOID,
 			Type:  gosnmp.OctetString,
 			Value: []byte("xe-0/0/45"),
+		},
+	},
+}
+
+var snmpPacketSysUptime = gosnmp.SnmpPacket{
+	Variables: []gosnmp.SnmpPDU{
+		{
+			Name:  sysUpTimeOID,
+			Type:  gosnmp.TimeTicks,
+			Value: 1592000258,
 		},
 	},
 }
@@ -56,26 +85,22 @@ var snmpPacketUplink = gosnmp.SnmpPacket{
 var snmpPacketMetricsRun1 = gosnmp.SnmpPacket{
 	Variables: []gosnmp.SnmpPDU{
 		{
-			// ifOutDicards machine
-			Name:  ".1.3.6.1.2.1.2.2.1.19.524",
+			Name:  ifOutDiscardsMachineOID,
 			Type:  gosnmp.Counter32,
 			Value: uint(0),
 		},
 		{
-			// ifOutDiscards uplink
-			Name:  ".1.3.6.1.2.1.2.2.1.19.568",
+			Name:  ifOutDiscardsUplinkOID,
 			Type:  gosnmp.Counter32,
 			Value: uint(3),
 		},
 		{
-			// ifHCInOctets machine
-			Name:  ".1.3.6.1.2.1.31.1.1.1.6.524",
+			Name:  ifHCInOctetsMachineOID,
 			Type:  gosnmp.Counter64,
 			Value: uint64(275),
 		},
 		{
-			// ifHCInOctets uplink
-			Name:  ".1.3.6.1.2.1.31.1.1.1.6.568",
+			Name:  ifHCInOctetsUplinkOID,
 			Type:  gosnmp.Counter64,
 			Value: uint64(437),
 		},
@@ -85,79 +110,24 @@ var snmpPacketMetricsRun1 = gosnmp.SnmpPacket{
 var snmpPacketMetricsRun2 = gosnmp.SnmpPacket{
 	Variables: []gosnmp.SnmpPDU{
 		{
-			// ifOutDicards machine
-			Name:  ".1.3.6.1.2.1.2.2.1.19.524",
+			Name:  ifOutDiscardsMachineOID,
 			Type:  gosnmp.Counter32,
 			Value: uint(0),
 		},
 		{
-			// ifOutDiscards uplink
-			Name:  ".1.3.6.1.2.1.2.2.1.19.568",
+			Name:  ifOutDiscardsUplinkOID,
 			Type:  gosnmp.Counter32,
 			Value: uint(8),
 		},
 		{
-			// ifHCInOctets machine
-			Name:  ".1.3.6.1.2.1.31.1.1.1.6.524",
+			Name:  ifHCInOctetsMachineOID,
 			Type:  gosnmp.Counter64,
 			Value: uint64(511),
 		},
 		{
-			// ifHCInOctets uplink
-			Name:  ".1.3.6.1.2.1.31.1.1.1.6.568",
+			Name:  ifHCInOctetsUplinkOID,
 			Type:  gosnmp.Counter64,
 			Value: uint64(624),
-		},
-	},
-}
-
-var expectedMetricsOIDs = map[string]oid{
-	".1.3.6.1.2.1.2.2.1.19.524": oid{
-		name:          "ifOutDiscards",
-		previousValue: 0,
-		scope:         "machine",
-		ifDescr:       "xe-0/0/12",
-		intervalSeries: archive.Model{
-			Experiment: "s1-abc0t.measurement-lab.org",
-			Hostname:   "mlab2-abc0t.mlab-sandbox.measurement-lab.org",
-			Metric:     "switch.discards.local.tx",
-			Samples:    []archive.Sample{},
-		},
-	},
-	".1.3.6.1.2.1.2.2.1.19.568": oid{
-		name:          "ifOutDiscards",
-		previousValue: 0,
-		scope:         "uplink",
-		ifDescr:       "xe-0/0/45",
-		intervalSeries: archive.Model{
-			Experiment: "s1-abc0t.measurement-lab.org",
-			Hostname:   "mlab2-abc0t.mlab-sandbox.measurement-lab.org",
-			Metric:     "switch.discards.uplink.tx",
-			Samples:    []archive.Sample{},
-		},
-	},
-	".1.3.6.1.2.1.31.1.1.1.6.524": oid{
-		name:          "ifHCInOctets",
-		previousValue: 0,
-		scope:         "machine",
-		ifDescr:       "xe-0/0/12",
-		intervalSeries: archive.Model{
-			Experiment: "s1-abc0t.measurement-lab.org",
-			Hostname:   "mlab2-abc0t.mlab-sandbox.measurement-lab.org",
-			Metric:     "switch.octets.local.rx",
-			Samples:    []archive.Sample{},
-		},
-	},
-	".1.3.6.1.2.1.31.1.1.1.6.568": oid{
-		name:          "ifHCInOctets",
-		previousValue: 0,
-		scope:         "uplink",
-		ifDescr:       "xe-0/0/45",
-		intervalSeries: archive.Model{
-			Experiment: "s1-abc0t.measurement-lab.org",
-			Hostname:   "mlab2-abc0t.mlab-sandbox.measurement-lab.org",
-			Metric:     "switch.octets.uplink.rx",
-			Samples:    []archive.Sample{},
 		},
 	},
 }
@@ -170,12 +140,12 @@ type mockRealSNMP struct {
 func (m *mockRealSNMP) BulkWalkAll(rootOid string) (results []gosnmp.SnmpPDU, err error) {
 	return []gosnmp.SnmpPDU{
 		{
-			Name:  ".1.3.6.1.2.1.31.1.1.1.18.524",
+			Name:  ifDescrMachineOID,
 			Type:  gosnmp.OctetString,
 			Value: []byte("mlab2"),
 		},
 		{
-			Name:  ".1.3.6.1.2.1.31.1.1.1.18.568",
+			Name:  ifDescrUplinkOID,
 			Type:  gosnmp.OctetString,
 			Value: []byte("uplink-10g"),
 		},
@@ -187,11 +157,14 @@ func (m *mockRealSNMP) Get(oids []string) (result *gosnmp.SnmpPacket, err error)
 
 	// len(oids) will only be one when looking up ifDescr.
 	if len(oids) == 1 {
-		if oids[0] == ".1.3.6.1.2.1.2.2.1.2.524" {
+		if oids[0] == ifDescrMachineOID {
 			packet = &snmpPacketMachine
 		}
-		if oids[0] == ".1.3.6.1.2.1.2.2.1.2.568" {
+		if oids[0] == ifDescrUplinkOID {
 			packet = &snmpPacketUplink
+		}
+		if oids[0] == sysUpTimeOID {
+			packet = &snmpPacketSysUptime
 		}
 	}
 
@@ -209,12 +182,67 @@ func (m *mockRealSNMP) Get(oids []string) (result *gosnmp.SnmpPacket, err error)
 }
 
 func Test_New(t *testing.T) {
+	// Each run of New() registers metrics in a global default prometheus
+	// registry. This resets the default registry so that we can run New()
+	// serveral times without getting panics about trying to registser the same
+	// metric twice.
 	prometheus.DefaultRegisterer = prometheus.NewRegistry()
 
-	var s = &mockRealSNMP{
+	s := &mockRealSNMP{
 		err: nil,
 	}
 	m := New(s, c, target, hostname)
+
+	var expectedMetricsOIDs = map[string]oid{
+		ifOutDiscardsMachineOID: oid{
+			name:          "ifOutDiscards",
+			previousValue: 0,
+			scope:         "machine",
+			ifDescr:       "xe-0/0/12",
+			intervalSeries: archive.Model{
+				Experiment: "s1-abc0t.measurement-lab.org",
+				Hostname:   "mlab2-abc0t.mlab-sandbox.measurement-lab.org",
+				Metric:     "switch.discards.local.tx",
+				Samples:    []archive.Sample{},
+			},
+		},
+		ifOutDiscardsUplinkOID: oid{
+			name:          "ifOutDiscards",
+			previousValue: 0,
+			scope:         "uplink",
+			ifDescr:       "xe-0/0/45",
+			intervalSeries: archive.Model{
+				Experiment: "s1-abc0t.measurement-lab.org",
+				Hostname:   "mlab2-abc0t.mlab-sandbox.measurement-lab.org",
+				Metric:     "switch.discards.uplink.tx",
+				Samples:    []archive.Sample{},
+			},
+		},
+		ifHCInOctetsMachineOID: oid{
+			name:          "ifHCInOctets",
+			previousValue: 0,
+			scope:         "machine",
+			ifDescr:       "xe-0/0/12",
+			intervalSeries: archive.Model{
+				Experiment: "s1-abc0t.measurement-lab.org",
+				Hostname:   "mlab2-abc0t.mlab-sandbox.measurement-lab.org",
+				Metric:     "switch.octets.local.rx",
+				Samples:    []archive.Sample{},
+			},
+		},
+		ifHCInOctetsUplinkOID: oid{
+			name:          "ifHCInOctets",
+			previousValue: 0,
+			scope:         "uplink",
+			ifDescr:       "xe-0/0/45",
+			intervalSeries: archive.Model{
+				Experiment: "s1-abc0t.measurement-lab.org",
+				Hostname:   "mlab2-abc0t.mlab-sandbox.measurement-lab.org",
+				Metric:     "switch.octets.uplink.rx",
+				Samples:    []archive.Sample{},
+			},
+		},
+	}
 
 	if !reflect.DeepEqual(m.oids, expectedMetricsOIDs) {
 		t.Errorf("Unexpected Metrics.oids.\nGot:\n%v\nExpected:\n%v", m.oids, expectedMetricsOIDs)
@@ -238,22 +266,22 @@ func Test_Collect(t *testing.T) {
 	prometheus.DefaultRegisterer = prometheus.NewRegistry()
 
 	var expectedValues = map[string]map[string]uint64{
-		".1.3.6.1.2.1.2.2.1.19.524": map[string]uint64{
+		ifOutDiscardsMachineOID: map[string]uint64{
 			"run1Prev":   0,
 			"run2Prev":   0,
 			"run2Sample": 0,
 		},
-		".1.3.6.1.2.1.2.2.1.19.568": map[string]uint64{
+		ifOutDiscardsUplinkOID: map[string]uint64{
 			"run1Prev":   3,
 			"run2Prev":   8,
 			"run2Sample": 5,
 		},
-		".1.3.6.1.2.1.31.1.1.1.6.524": map[string]uint64{
+		ifHCInOctetsMachineOID: map[string]uint64{
 			"run1Prev":   275,
 			"run2Prev":   511,
 			"run2Sample": 236,
 		},
-		".1.3.6.1.2.1.31.1.1.1.6.568": map[string]uint64{
+		ifHCInOctetsUplinkOID: map[string]uint64{
 			"run1Prev":   437,
 			"run2Prev":   624,
 			"run2Sample": 187,
@@ -302,4 +330,69 @@ func Test_Collect(t *testing.T) {
 		}
 	}
 
+}
+
+func Test_getOidsInt64BadType(t *testing.T) {
+	var s = &mockRealSNMP{}
+	var oids = []string{sysUpTimeOID}
+	_, err := getOidsInt64(s, oids)
+	if err == nil {
+		t.Error("Expected an error but didn't get one")
+	}
+}
+
+func Test_getOidsInt64NoResults(t *testing.T) {
+	var s = &mockRealSNMP{}
+	var oids = []string{"fake-oid"}
+	_, err := getOidsInt64(s, oids)
+	if err == nil {
+		t.Errorf("Expected an error but didn't get one")
+	}
+}
+
+func Test_CollectWithSnmpError(t *testing.T) {
+	prometheus.DefaultRegisterer = prometheus.NewRegistry()
+
+	s := &mockRealSNMP{}
+	m := New(s, c, target, hostname)
+
+	sErr := &mockRealSNMP{
+		err: fmt.Errorf("An SNMP error occured: %s", "error"),
+		run: 1,
+	}
+	err := m.Collect(sErr, c)
+	if err == nil {
+		t.Error("Expected an error but didn't get one")
+	}
+}
+
+func Test_Write(t *testing.T) {
+	prometheus.DefaultRegisterer = prometheus.NewRegistry()
+
+	s1 := &mockRealSNMP{
+		err: nil,
+		run: 1,
+	}
+	m := New(s1, c, target, hostname)
+	m.Collect(s1, c)
+
+	s2 := &mockRealSNMP{
+		err: nil,
+		run: 2,
+	}
+	m.Collect(s2, c)
+
+	archivePath := archive.GetPath(time.Now(), hostname, 10)
+	dirPath := path.Dir(archivePath)
+
+	m.Write(10)
+	defer os.RemoveAll(strings.Split(archivePath, "/")[0])
+
+	a, err := ioutil.ReadDir(dirPath)
+	rtx.Must(err, "Could not read test archive directory")
+
+	if len(a) != 1 {
+		t.Errorf("Expected one archive file, but got: %v", len(a))
+	}
+	os.RemoveAll(string(time.Now().Year()))
 }

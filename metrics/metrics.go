@@ -63,14 +63,14 @@ func getIfaces(snmp snmp.SNMP, machine string) map[string]map[string]string {
 		b := pdu.Value.([]byte)
 		val := strings.TrimSpace(string(b))
 		if val == machine {
-			ifDescrOid := createOid(ifDescrOidStub, iface)
+			ifDescrOid := createOID(ifDescrOidStub, iface)
 			oidMap, err := getOidsString(snmp, []string{ifDescrOid})
 			rtx.Must(err, "Failed to determine the machine interface ifDescr")
 			ifaces["machine"]["ifDescr"] = oidMap[ifDescrOid]
 			ifaces["machine"]["iface"] = iface
 		}
 		if strings.HasPrefix(val, "uplink") {
-			ifDescrOid := createOid(ifDescrOidStub, iface)
+			ifDescrOid := createOID(ifDescrOidStub, iface)
 			oidMap, err := getOidsString(snmp, []string{ifDescrOid})
 			rtx.Must(err, "Failed to determine the uplink interface ifDescr")
 			ifaces["uplink"]["ifDescr"] = oidMap[ifDescrOid]
@@ -97,10 +97,13 @@ func getOidsString(snmp snmp.SNMP, oids []string) (map[string]string, error) {
 //
 // Counter32 OIDs seem to be presented as type uint, while Counter64 OIDs seem
 // to be presented as type uint64.
-func getOidsInt64(snmp snmp.SNMP, oids []string) (map[string]uint64,
-	error) {
+func getOidsInt64(snmp snmp.SNMP, oids []string) (map[string]uint64, error) {
 	oidMap := make(map[string]uint64)
 	result, err := snmp.Get(oids)
+	if result == nil {
+		err = fmt.Errorf("No results returned from server for oids: %v", oids)
+		return nil, err
+	}
 	for _, pdu := range result.Variables {
 		switch value := pdu.Value.(type) {
 		case uint:
@@ -108,22 +111,23 @@ func getOidsInt64(snmp snmp.SNMP, oids []string) (map[string]uint64,
 		case uint64:
 			oidMap[pdu.Name] = value
 		default:
-			log.Fatalf("Unknown type %T of SNMP type %v for OID %v\n", value, pdu.Type, pdu.Name)
+			err = fmt.Errorf("Unknown type %T of SNMP type %v for OID %v", value, pdu.Type, pdu.Name)
+			return nil, err
 		}
 	}
 	return oidMap, err
 }
 
-// createOid joins and OID stub with a logical interface number, returning the
+// createOID joins an OID stub with a logical interface number, returning the
 // complete OID.
-func createOid(oidStub string, iface string) string {
+func createOID(oidStub string, iface string) string {
 	return fmt.Sprintf("%v.%v", oidStub, iface)
 }
 
 // Collect scrapes values for a list of OIDs and updates a map of OIDs,
 // appending a new archive.Sample representing the increase from the previous
 // scrape to an array of samples for that OID.
-func (metrics *Metrics) Collect(snmp snmp.SNMP, config config.Config) {
+func (metrics *Metrics) Collect(snmp snmp.SNMP, config config.Config) error {
 	// Set a lock to avoid a race between the collecting and writing of metrics.
 	metrics.mutex.Lock()
 	defer metrics.mutex.Unlock()
@@ -136,7 +140,7 @@ func (metrics *Metrics) Collect(snmp snmp.SNMP, config config.Config) {
 	if err != nil {
 		log.Printf("ERROR: failed to GET OIDs (%v) from SNMP server: %v", oids, err)
 		// TODO(kinkade): increment some sort of error metric here.
-		return
+		return err
 	}
 
 	for oid, value := range oidValueMap {
@@ -168,6 +172,8 @@ func (metrics *Metrics) Collect(snmp snmp.SNMP, config config.Config) {
 	if metrics.firstRun == true {
 		metrics.firstRun = false
 	}
+
+	return nil
 }
 
 // Write collects JSON data for all OIDs and then writes the result to an archive.
@@ -217,7 +223,7 @@ func New(snmp snmp.SNMP, config config.Config, target string, hostname string) *
 			"uplink":  metric.MlabUplinkName,
 		}
 		for scope, values := range ifaces {
-			oidStr := createOid(metric.OidStub, values["iface"])
+			oidStr := createOID(metric.OidStub, values["iface"])
 			o := oid{
 				name:    metric.Name,
 				scope:   scope,
