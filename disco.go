@@ -3,18 +3,16 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"time"
 
 	"github.com/go-co-op/gocron"
+	"github.com/m-lab/go/prometheusx"
 	"github.com/m-lab/go/rtx"
 	"github.com/nkinkade/disco-go/config"
 	"github.com/nkinkade/disco-go/metrics"
 	"github.com/nkinkade/disco-go/snmp"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/soniah/gosnmp"
 )
 
@@ -60,30 +58,19 @@ func main() {
 		time.Sleep(1 * time.Second)
 	}
 
-	cronCollectMetrics := gocron.NewScheduler(time.UTC)
-	cronCollectMetrics.Every(10).Seconds().StartImmediately().Do(metrics.Collect, client, config)
-	cronCollectMetrics.StartAsync()
+	promSrv := prometheusx.MustServeMetrics()
+
+	go func() {
+		<-mainCtx.Done()
+		goSNMP.Conn.Close()
+		promSrv.Close()
+	}()
 
 	cronWriteMetrics := gocron.NewScheduler(time.UTC)
 	cronWriteMetrics.Every(*fWriteInterval).Seconds().Do(metrics.Write, *fWriteInterval)
 	cronWriteMetrics.StartAsync()
 
-	http.Handle("/metrics", promhttp.Handler())
-
-	srv := http.Server{
-		Addr:    *fListenAddress,
-		Handler: http.DefaultServeMux,
-	}
-
-	fmt.Printf("Listening on port %v.\n", *fListenAddress)
-
-	// When the context is canceled, stop serving.
-	go func() {
-		<-mainCtx.Done()
-		goSNMP.Conn.Close()
-		srv.Close()
-	}()
-
-	// Listen forever, or until the context is closed.
-	logFatal(srv.ListenAndServe())
+	cronCollectMetrics := gocron.NewScheduler(time.UTC)
+	cronCollectMetrics.Every(10).Seconds().StartImmediately().Do(metrics.Collect, client, config)
+	cronCollectMetrics.StartBlocking()
 }
