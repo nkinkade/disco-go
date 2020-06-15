@@ -33,9 +33,8 @@ func main() {
 		log.Fatalf("Environment variable not set: DISCO_COMMUNITY")
 	}
 
-	//hostname, err := os.Hostname()
-	//rtx.Must(err, "Failed to determine the hostname of the system")
-	hostname := "mlab2.lga0t.mlab-sandbox.measurement-lab.org"
+	hostname, err := os.Hostname()
+	rtx.Must(err, "Failed to determine the hostname of the system")
 
 	goSNMP := &gosnmp.GoSNMP{
 		Target:    *fTarget,
@@ -45,7 +44,7 @@ func main() {
 		Timeout:   time.Duration(2) * time.Second,
 		Retries:   1,
 	}
-	err := goSNMP.Connect()
+	err = goSNMP.Connect()
 	rtx.Must(err, "Failed to connect to the SNMP server")
 
 	config, err := config.New(*fMetricsFile)
